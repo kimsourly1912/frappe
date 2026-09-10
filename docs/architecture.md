@@ -123,15 +123,58 @@ lifecycle logic. `Order` never talks to a payment gateway directly — a payment
 plugs in behind the `Payment` boundary. See [domain-model.md](domain-model.md) for the
 planned shape; the abstraction is built in Slice 8, manual payment first in Slice 7.
 
-## Customer-facing UI
+## Customer-facing UI — *implemented, Slice 5*
 
-The customer QR/menu/cart/order experience is **not** Frappe Desk. It's a small,
-mobile-first web app served from this app's `www/` (Jinja-rendered pages) or a bundled
-JS entry point under `public/`, using the exact same server-side session-less,
-token-scoped authorization described above. The concrete mechanism (server-rendered
-Jinja vs. a bundled SPA) is decided in Slice 5, once the ordering API shape (Slice 6
-depends on it existing first, so Slice 5 builds against a stub) is clearer — this file
-will be updated then with the final choice and why.
+The customer QR/menu/cart experience is **not** Frappe Desk. It's a single, standalone
+Frappe website page: `e_menu/www/menu.py` + `www/menu.html`, mapped from
+`/menu/<public_id>/<table_token>` via a `website_route_rules` hook, using the exact same
+server-side session-less, token-scoped authorization described above (it calls
+`resolve_qr` from Slice 4 directly).
+
+**Decision: server-rendered Jinja page, not a bundled SPA, not Frappe UI.** Evaluated
+per the project's "built-in → official integration → small dependency → custom" order:
+
+- A **Frappe website page** (Jinja `www/` template + plain CSS/JS) is Frappe's own
+  built-in mechanism for exactly this — an unauthenticated, public, mobile-friendly
+  page — and needs no build step beyond what the app already has. `website_route_rules`
+  is the documented, idiomatic way to give a `www/` page dynamic URL segments;
+  `frappe.get_all` in `get_context()` covers the data fetch; standard Jinja
+  autoescaping covers XSS on owner-entered menu text. Nothing about this flow (browse a
+  short, mostly-static menu; hold a small cart in memory) needs a client-side router,
+  component framework, or reactive state library.
+- **Frappe UI** (the Vue component library + Vite-based frontend the Frappe team uses
+  for apps like Helpdesk) is real and official, but it's sized for building an entire
+  rich application shell — it would add a whole separate `frontend/` build pipeline
+  (Node/Vite, its own `package.json`, a dev server proxied through Frappe) for a single
+  page with one interaction pattern (tap to add, view a running total). That's the
+  "don't add abstractions before the concrete need exists" line: if E-menu later needs
+  a genuinely app-like customer experience (saved order history, live order-status
+  push, multi-step checkout flows), revisit — that's a real trigger, not a preemptive one.
+- A **custom SPA in a separate repository** is explicitly ruled out by the product
+  spec ("do NOT create a separate frontend repository unless there is a strong
+  reason") and there isn't one here.
+
+**Standalone, not extending the default website theme.** `www/menu.html` does not
+`{% extends "templates/web.html" %}` (the pattern most `frappe/www/*.html` files use,
+which pulls in the site navbar/footer/Bootstrap theme) — it's a bare `<!DOCTYPE html>`
+document with its own `<head>`/mobile-first CSS, the same pattern Frappe core itself
+uses for `www/app.html` (the Desk shell) and `www/printview.html`. A restaurant's
+customer page shouldn't carry E-menu's own website chrome.
+
+**Cart is a client-side concern for this slice.** Vanilla JS (no framework), state held
+in a plain object, persisted to `localStorage` keyed by the table's `qr_token` (so
+reloading the same table's page restores the cart, and different tables/restaurants on
+the same device never mix carts). There is deliberately no submit action yet — building
+the cart is the literal Slice 5 scope per the product spec's flow diagram; "submit
+order" is Slice 6, which will add a real endpoint and move cart submission to
+server-verified state rather than trusting anything client-side (see "Money and totals"
+below — the same rule applies here: nothing the customer's browser computed is ever
+trusted for the actual order total).
+
+`get_context()` fails exactly like `resolve_qr` does — one generic "menu unavailable"
+page (HTTP 404) for every invalid/deactivated case, never revealing which part failed —
+but renders it as a normal, on-brand page rather than a raw API error, since a human
+is looking at it.
 
 ## Repository boundary
 

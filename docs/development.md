@@ -354,11 +354,57 @@ resolved restaurant/table for a valid pair and HTTP 404 with a generic message f
 invalid one; the generated QR image (`GET /files/<table>-qr.png`) is fetched
 unauthenticated and confirmed to be a valid, scannable 450×450 PNG.
 
-## What's next: Slice 5
+## Customer menu: what's built in Slice 5
 
-Slice 5 implements the customer-facing public menu: a mobile-first web experience
-(no Desk, no login) where scanning a table's QR — resolved via `resolve_qr` (Slice 4)
-— leads to browsing that restaurant's active categories and available items and
-building a cart. See [domain-model.md](domain-model.md) and `architecture.md` →
-Customer-facing UI for the planned shape; the concrete mechanism (server-rendered Jinja
-`www/` pages vs. a bundled JS entry point) is decided at the start of that slice.
+`e_menu/www/menu.py` + `menu.html`, routed from `/menu/<public_id>/<table_token>` via
+`website_route_rules` (see `architecture.md` → Customer-facing UI for the "why this
+approach" decision). No new DocTypes, no new Frappe Roles -- this slice is entirely the
+public-facing layer on top of Slices 1-4. `get_context()` calls `resolve_qr` (Slice 4)
+directly and, only on success, fetches active categories / available items scoped to
+the resolved restaurant. Cart state is vanilla JS, `localStorage`-backed per table
+token, with no submit action yet (that's Slice 6).
+
+One real bug worth knowing about if you touch this file: **never name a dict key
+`items`** on a `frappe.get_all()`/`frappe._dict` row that a Jinja template will access
+by attribute (`row.items`) -- `dict` already has a real `.items()` method, which Jinja's
+attribute-then-subscript lookup finds first, silently returning a bound method instead
+of your data (`TypeError: 'builtin_function_or_method' object is not iterable`). See
+`get_available_menu()`'s `menu_items` key naming.
+
+## Verifying it runs (Slice 5 acceptance)
+
+```bash
+bench --site emenu.localhost execute e_menu.e_menu.demo.create_demo_data
+# -> (still idempotent) prints each demo table's menu_url -- open one on your phone
+#    or in a browser to see the live customer menu
+
+bench --site emenu.localhost run-tests --app e_menu
+# -> Ran 58 tests ... OK
+#    (54 from Slices 1-4, plus: get_available_menu excludes inactive categories,
+#    unavailable items, and categories left with zero available items; get_context
+#    resolves a valid QR into the right restaurant/table; and fails safely -- generic
+#    404, no data leaked -- for an invalid token or a deactivated table)
+```
+
+Also verified live over real HTTP with **zero cookies**: `GET
+/menu/<public_id>/<table_token>` for a valid pair returns HTTP 200 with the live menu
+(confirmed against the exact URL encoded in that table's QR code from Slice 4); an
+invalid/deactivated token returns HTTP 404 with the same friendly "menu unavailable"
+page Frappe error responses would otherwise show raw. Screenshotted at a 390×844
+mobile viewport (Playwright + the pre-installed Chromium): category browsing, tapping
+"+" to add an item (button becomes a +/− stepper), the floating cart bar appearing with
+a live count/total, the cart drawer opening with correct line items, and the cart
+surviving a full page reload via `localStorage`.
+
+## What's next: Slice 6
+
+Slice 6 implements ordering: `Order` and `Order Item` (child table -- see
+`domain-model.md` for why), with server-side price calculation (never trusting a
+client-supplied price or total), the explicit order-lifecycle state machine
+(`accept()`, `start_preparing()`, `mark_ready()`, `mark_served()`, `complete()`,
+`cancel()` -- no generic "PATCH status to anything" endpoint), a `Guest`-scoped order
+submission endpoint that reuses `resolve_qr`'s `(restaurant, table)` resolution, and a
+restaurant-side operational order view respecting the OWNER/MANAGER/CASHIER/KITCHEN
+role boundaries already established. Acceptance: a customer submits an order, staff see
+it, authorized staff move it through valid states, invalid transitions fail. This is
+also where the Slice 5 cart's "Submit Order" action gets wired up for real.

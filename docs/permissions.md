@@ -1,13 +1,15 @@
 # Permissions: platform vs. restaurant-level
 
-> **Status:** Slice 3 — all three layers below are implemented: `System Manager`
-> (platform), `Restaurant Owner` (SaaS account-level), and `Restaurant Member` with its
-> per-restaurant `OWNER`/`MANAGER`/`CASHIER`/`KITCHEN` roles plus the `Restaurant Staff`
-> Frappe Role. `Menu Category`/`Menu Item` (Slice 3) reuse the exact same
-> restaurant-level mechanism — see "Extending this to new restaurant-scoped DocTypes"
-> below. Three Frappe Roles now exist (`System Manager`, `Restaurant Owner`,
-> `Restaurant Staff`) alongside the *separate* concept of a `Restaurant Member.role`
-> value — see the "Don't confuse these" callouts below if you're new to this file.
+> **Status:** Slice 5 — all three staff/admin layers below are implemented: `System
+> Manager` (platform), `Restaurant Owner` (SaaS account-level), and `Restaurant Member`
+> with its per-restaurant `OWNER`/`MANAGER`/`CASHIER`/`KITCHEN` roles plus the
+> `Restaurant Staff` Frappe Role. `Menu Category`/`Menu Item`/`Restaurant Table` reuse
+> the exact same restaurant-level mechanism — see "Extending this to new
+> restaurant-scoped DocTypes" below. The fourth layer, **customer-facing `Guest`
+> access**, is now implemented too — see that section below. Three Frappe Roles exist
+> (`System Manager`, `Restaurant Owner`, `Restaurant Staff`) alongside the *separate*
+> concept of a `Restaurant Member.role` value — see the "Don't confuse these" callouts
+> below if you're new to this file.
 
 ## Two separate authorization mechanisms
 
@@ -180,7 +182,7 @@ invariants of the data model, not permissions per se — the check runs even for
 platform admin, unlike every authorization check above. See `domain-model.md` for the
 specific integrity rules per DocType.
 
-## Customer-facing (unauthenticated) access — *token resolution implemented, Slice 4*
+## Customer-facing (unauthenticated) access — *implemented, Slices 4-5*
 
 Customers never log in — requests from the QR/menu/ordering flow run as Frappe's
 built-in `Guest` role. Their "authorization" isn't role-based at all: it's **scoped by
@@ -199,13 +201,24 @@ mechanism's server-side entry point today:
 - is reachable with **zero cookies/session** (verified live: a plain unauthenticated
   `curl` succeeds for a valid token pair, HTTP 404 for an invalid one).
 
-It only resolves *identity* — it doesn't return menu contents or accept an order. Slice
-5 builds the actual public menu page (browse categories/items) on top of this
-resolution; Slice 6 will add order submission, similarly scoped to `Guest` and to
-*that* resolved `(restaurant, table)` pair, never a client-supplied one. Once those
-land, the narrow-actions list this section originally sketched (browse
-active/available items, submit an order to *that* table, nothing else reachable on
-`Restaurant`/`Menu Item`/etc. by `Guest`) becomes the thing to verify against.
+It only resolves *identity* — it doesn't return menu contents or accept an order.
+
+**`e_menu/www/menu.py` (Slice 5)** is the actual public page, built on top of that
+resolution: its `get_context()` calls `resolve_qr` directly (not via HTTP — it's a
+plain Python function underneath the `@frappe.whitelist` decorator) and, only on
+success, queries active `Menu Category`/available `Menu Item` rows scoped to the
+resolved `restaurant` — using `frappe.get_all`, which does **not** go through
+`permission_query_conditions` (that's for `frappe.get_list`/API access checked against
+`frappe.session.user`'s permissions; here there's no restaurant-membership to check
+against for `Guest`, resolution via `resolve_qr` already *is* the authorization). The
+page never accepts a client-supplied `restaurant`/`category`/`item` id from the
+request — everything it renders is scoped to the one `restaurant` the QR resolved to.
+Still nothing else on `Restaurant`/`Menu Item`/etc. is reachable by `Guest` through the
+normal DocType API — only this one purpose-built, read-only path.
+
+Slice 6 will add order submission, similarly scoped to `Guest` and to *that* resolved
+`(restaurant, table)` pair, never a client-supplied one — see `architecture.md` →
+Customer-facing UI for why the cart stays client-side-only until then.
 
 ## Frappe v15/v16 custom permission "actions"
 

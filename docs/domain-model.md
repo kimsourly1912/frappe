@@ -1,11 +1,12 @@
 # Domain model
 
-> **Status:** Slice 4 — `Subscription Plan`, `Owner Subscription`, `Restaurant`,
+> **Status:** Slice 5 — `Subscription Plan`, `Owner Subscription`, `Restaurant`,
 > `Restaurant Member`, `Menu Category`, `Menu Item`, and `Restaurant Table` are
-> implemented (fields/behavior below reflect actual code, not just the plan). Everything
-> else is still the planned shape baselined from the product spec, to be implemented
-> incrementally (noted per-entity below) — treat those field lists as a starting point,
-> not a frozen schema.
+> implemented (fields/behavior below reflect actual code, not just the plan), and the
+> public customer menu page (no new DocTypes — see `architecture.md` → Customer-facing
+> UI) is built on top of them. Everything else is still the planned shape baselined from
+> the product spec, to be implemented incrementally (noted per-entity below) — treat
+> those field lists as a starting point, not a frozen schema.
 
 ## Entity-relationship overview
 

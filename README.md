@@ -9,10 +9,10 @@ E-menu is built as a custom [Frappe](https://frappeframework.com) app (`e_menu`)
 of Frappe Framework v15. It reuses Frappe's authentication, users, roles, permissions,
 DocTypes, REST API, background jobs, and Desk admin UI instead of rebuilding them.
 
-**Status:** Slice 4 (tables and QR) complete. `Subscription Plan`, `Owner Subscription`,
-`Restaurant`, `Restaurant Member` (staff roles: OWNER/MANAGER/CASHIER/KITCHEN), `Menu
-Category`, `Menu Item`, and `Restaurant Table` (with QR code generation and safe,
-unauthenticated QR-token resolution) are implemented. See
+**Status:** Slice 5 (customer menu) complete. The full owner/staff-facing data model
+(`Subscription Plan` through `Restaurant Table`, with QR generation) is implemented,
+and customers can now scan a table's QR and browse a live, mobile-first menu with a
+working cart — no login, no Desk — at `/menu/<public_id>/<table_token>`. See
 [docs/development.md](docs/development.md) for the delivery plan and what's next.
 
 ## Repository scope
@@ -32,7 +32,10 @@ how to stand up a bench locally that installs this app.
 │   ├── patches/              # data migration patches
 │   ├── public/                # static assets (css/js)
 │   ├── templates/            # Jinja templates / web pages
-│   ├── www/                   # public web routes (customer-facing pages, later slices)
+│   ├── www/                   # public customer pages (no Desk, no login)
+│   │   ├── menu.py             # /menu/<public_id>/<table_token> -- get_context()
+│   │   ├── menu.html           # standalone mobile-first page + cart JS
+│   │   └── test_menu.py
 │   ├── patches/v0_0/          # e.g. backfill_restaurant_owner_membership
 │   └── e_menu/                # "E Menu" module: DocTypes + demo.py (seed data)
 │       ├── doctype/

@@ -63,6 +63,16 @@ fixtures = [
 # include app icons in desk
 # app_include_icons = "e_menu/public/icons.svg"
 
+# Website Route Rules
+# --------------------
+# The public, unauthenticated customer menu (see docs/architecture.md -> Customer-
+# facing UI). public_id/table_token land in frappe.form_dict automatically via
+# Frappe's dynamic route matching -- see e_menu/www/menu.py.
+
+website_route_rules = [
+	{"from_route": "/menu/<public_id>/<table_token>", "to_route": "menu"},
+]
+
 # Home Pages
 # ----------
 
