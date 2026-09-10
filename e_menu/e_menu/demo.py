@@ -7,6 +7,7 @@
 import frappe
 
 from e_menu.e_menu.doctype.order.order import submit_order
+from e_menu.e_menu.doctype.payment.payment import confirm_manual_payment
 from e_menu.e_menu.doctype.restaurant_member.restaurant_member import invite_staff
 from e_menu.e_menu.doctype.restaurant_table.restaurant_table import resolve_qr
 
@@ -47,6 +48,7 @@ def create_demo_data():
 	fried_rice = frappe.get_doc("Menu Item", {"restaurant": restaurant.name, "item_name": "Fried Rice"})
 	order = create_demo_order(restaurant, tables["T01"], fried_rice)
 	demonstrate_order_lifecycle(order)
+	demonstrate_payment_confirmation(order)
 
 	frappe.db.commit()
 	print("\nDemo data ready.")
@@ -452,5 +454,33 @@ def demonstrate_order_lifecycle(order):
 		print(f"Confirmed invalid transition rejected -- can't complete a COMPLETED order: {e}")
 	else:
 		print("WARNING: an invalid order transition was NOT rejected -- state machine may be broken.")
+	finally:
+		frappe.set_user("Administrator")
+
+
+def demonstrate_payment_confirmation(order):
+	"""Proves the Slice 7 acceptance criterion live: a cashier confirms manual
+	payment for the order, Order.payment_status flips to Paid (via Payment.
+	on_update, never edited on Order directly), and a second confirmation attempt
+	on an already-paid order is rejected."""
+	if frappe.db.get_value("Order", order.name, "payment_status") == "Paid":
+		print(f"{order.name} is already Paid -- skipping payment demo (idempotent re-run).")
+		return
+
+	cashier = "cashier@example.com"
+	frappe.set_user(cashier)
+	try:
+		result = confirm_manual_payment(order.name, "CASH")
+	finally:
+		frappe.set_user("Administrator")
+	print(f"Cashier confirmed manual payment {result['payment']} for {order.name} (${order.total}, CASH)")
+
+	frappe.set_user(cashier)
+	try:
+		confirm_manual_payment(order.name, "CASH")
+	except frappe.ValidationError as e:
+		print(f"Confirmed an already-paid order cannot be paid again: {e}")
+	else:
+		print("WARNING: a second payment confirmation was NOT rejected -- payment integrity may be broken.")
 	finally:
 		frappe.set_user("Administrator")

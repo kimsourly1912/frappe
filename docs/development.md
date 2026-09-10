@@ -480,11 +480,81 @@ confirmation overlay isn't blocking input) and the cart is empty afterward. Desk
 `order.js` action buttons were also screenshotted per status and confirmed to correctly
 transition an order end-to-end.
 
-## What's next: Slice 7
+## Payment confirmation: what's built in Slice 7
 
-Slice 7 implements manual payment confirmation: a `Payment` DocType
-(`provider`/`provider_reference`/`method`/`amount`/`status`, provider-neutral per
-`architecture.md` → Payments) recording that a `COMPLETED` order was paid, plus staff
-action(s) to confirm payment. `Order.payment_status` (already present, currently always
-`Unpaid`) starts getting set for real. No payment gateway integration yet -- that's
-Slice 8, behind the same `Payment` boundary.
+`Payment` (`e_menu/e_menu/doctype/payment/`) implements manual payment confirmation on
+top of Slice 6. Key pieces:
+
+- Independent DocType (not a child table of `Order` -- a Slice 8 online payment attempt
+  may fail and retry, so a payment needs its own identity and lifecycle independent of
+  the order it's for), restaurant- and order-scoped.
+- **`confirm_manual_payment(order, method)`** -- `@frappe.whitelist()`, login required
+  (a staff action, not a customer one). Checks the caller's restaurant role
+  (`OWNER`/`MANAGER`/`CASHIER` -- the same front-of-house set as `Order`'s cashier-type
+  actions; `KITCHEN` never touches payments) manually, the same way `submit_order`
+  checks `resolve_qr`'s result itself, since a bare `@frappe.whitelist()` function gets
+  no DocType permission check for free. Never accepts an `amount` parameter at all.
+- **`Payment.link_and_validate_order()`** (`validate()`, insert-only) re-derives
+  `restaurant` and `amount` from the linked `Order` on every insert, regardless of
+  caller -- the same "never trust the client for money" rule
+  `Order.snapshot_and_calculate_items` applies to menu item price/name -- and rejects a
+  payment against an order that's already `Paid`, or `CANCELLED`/`REJECTED`.
+- **`Payment.on_update()`** is the one place `Order.payment_status` is ever set:
+  `frappe.get_doc("Order", self.order).db_set("payment_status", "Paid")` when
+  `self.status == "PAID"` -- bypassing `Order.validate()`/`reject_direct_edit`, same
+  trick the order-lifecycle actions use. `Order` never talks to payment logic directly.
+- **`Payment.reject_direct_edit()`** mirrors `Order`'s -- once created, a `Payment` is
+  never resaved by anyone, admins included. Unlike `Order`, this doesn't need a broad
+  `"write"` grant to restaurant staff at all: `Payment` exposes no whitelisted instance
+  methods (only the module-level `confirm_manual_payment`), so there's no
+  `run_method`-convention reason to widen `has_permission_payment` past `"read"`. See
+  `docs/permissions.md` → "Payment: no write, no run_method carve-out" for the full
+  comparison against `Order`'s permission shape.
+- `order.js` adds a "Confirm Payment" button (visible whenever `payment_status` is
+  `Unpaid` and the order isn't `CANCELLED`/`REJECTED`) that prompts for a method
+  (Cash/Card/Other) and calls `confirm_manual_payment` via `frappe.call` -- a plain
+  whitelisted function, not a document method, so this uses `frappe.call`, not
+  `frm.call()` like the status-action buttons.
+
+`status` (`PENDING`/`PAID`/`FAILED`) and `provider_reference` exist on the DocType now
+so Slice 8's async online-provider flow doesn't need a schema change, but Slice 7 only
+ever inserts a `Payment` already `PAID` -- a manual (cash/card-in-hand) confirmation is
+inherently synchronous.
+
+## Verifying it runs (Slice 7 acceptance)
+
+```bash
+bench --site emenu.localhost execute e_menu.e_menu.demo.create_demo_data
+# -> (still idempotent) the first time only: cashier confirms manual CASH payment for
+#    the demo order, printing the created Payment name and the order total, plus proof
+#    that confirming payment twice on the same order is rejected
+
+bench --site emenu.localhost run-tests --app e_menu
+# -> Ran 88 tests ... OK
+#    (77 from Slices 1-6, plus: cashier/owner can confirm manual payment and it sets
+#    Order.payment_status to Paid, kitchen cannot, a second confirmation on an
+#    already-paid order is rejected, confirming payment on a cancelled order is
+#    rejected, an invalid method is rejected, a client-supplied amount is always
+#    overwritten from the order's own total -- even bypassing confirm_manual_payment
+#    entirely via a direct insert, a Payment can never be edited after creation,
+#    restaurant staff cannot create a Payment directly (base DocType permissions),
+#    tenant isolation for reading Payment records, and platform-admin bypass)
+```
+
+Also verified live over real HTTP: a cashier's `POST .../confirm_manual_payment`
+succeeds (200), creates a `PAID` Payment, and flips the order's `payment_status` to
+`Paid`; the same call from a kitchen-role user returns 403; a second confirmation on the
+same order returns 417 (`ValidationError`, "already paid"). Playwright-verified in Desk
+at 1280x900: the "Confirm Payment" button appears on a `PENDING`/`Unpaid` order
+alongside the status actions, clicking it opens a payment-method prompt, and submitting
+it updates `Payment Status` from `Unpaid` to `Paid` and removes the button (payment is
+no longer outstanding) -- all without touching `Order.status` at all.
+
+## What's next: Slice 8
+
+Slice 8 builds the online-payment provider abstraction: named providers beyond
+`MANUAL` on `Payment.provider`, a server-verified webhook/callback endpoint that drives
+the `PENDING → PAID`/`PENDING → FAILED` transition (never the customer's browser
+reaching a "success" redirect page), and a mock/test provider to prove the abstraction
+without a real payment gateway integration. `Order.payment_method = "ONLINE"` (accepted
+since Slice 6 but not yet acted on) starts mattering for real.

@@ -1,11 +1,13 @@
 # Domain model
 
-> **Status:** Slice 6 — `Subscription Plan` through `Restaurant Table` (Slices 1-4) plus
-> `Order`/`Order Item` (Slice 6) are implemented (fields/behavior below reflect actual
-> code, not just the plan). The public customer menu page (Slice 5, no new DocTypes —
-> see `architecture.md` → Customer-facing UI) now submits real orders. `Payment` is still
-> the planned shape baselined from the product spec — treat that field list as a
-> starting point, not a frozen schema.
+> **Status:** Slice 7 — `Subscription Plan` through `Restaurant Table` (Slices 1-4),
+> `Order`/`Order Item` (Slice 6), and `Payment` (Slice 7, manual confirmation only) are
+> all implemented (fields/behavior below reflect actual code, not just the plan). The
+> public customer menu page (Slice 5, no new DocTypes — see `architecture.md` →
+> Customer-facing UI) now submits real orders, and restaurant staff can confirm manual
+> payment against them. Slice 8's online-provider abstraction is still the planned
+> shape baselined from the product spec — treat `Payment.provider`'s eventual online
+> options as a starting point, not a frozen schema.
 
 ## Entity-relationship overview
 
@@ -350,19 +352,61 @@ incoming orders"; the form + action buttons are "move it through valid states". 
 faster multi-order-at-a-glance view becomes a real need later, that's a concrete
 trigger to revisit — not a preemptive one.
 
-### Payment — *Slice 7 (manual) / Slice 8 (provider abstraction)*
-Restaurant- and order-scoped. `provider` distinguishes `MANUAL` from named online
-providers; `provider_reference` holds the gateway's own transaction id for online
-payments. An order's `payment_status` only flips to paid once a `Payment` row reaches
-`PAID` status — for online payments, that transition is driven by a server-verified
+### Payment — *implemented (manual), Slice 7 / provider abstraction, Slice 8*
+Restaurant- and order-scoped: `restaurant` and `amount` are never client-supplied —
+`Payment.link_and_validate_order` (`validate()`, insert-only) always derives both from
+the linked `order` fresh from the database, the same "never trust the client for money"
+rule `Order.snapshot_and_calculate_items` applies to menu item price/name. `provider`
+distinguishes `MANUAL` (the only option Slice 7 ships) from named online providers,
+added to the `Select` in Slice 8; `provider_reference` holds the gateway's own
+transaction id and stays blank for manual payments. `status` (`PENDING`/`PAID`/`FAILED`)
+exists as a field now so Slice 8's async online flow doesn't need a schema change, but
+Slice 7 only ever inserts a `Payment` already `PAID` — a manual (cash/card-in-hand)
+confirmation is inherently synchronous, there's no pending phase to model yet.
+
+**`confirm_manual_payment(order, method)`** (`payment.py`, `@frappe.whitelist()`, login
+required — this is a staff action, not a customer one) is the only sanctioned creation
+path: checks the caller's restaurant role against `CONFIRM_ROLES` (`OWNER`/`MANAGER`/
+`CASHIER` — the same front-of-house set as Order's cashier-type actions; `KITCHEN` never
+touches payments) manually, since a bare `@frappe.whitelist()` function gets no DocType
+permission check for free (the same reason `submit_order` checks `resolve_qr`'s result
+itself), then inserts with `ignore_permissions=True`. It never accepts an `amount`
+parameter at all — there's no field for a client to override even if it tried.
+
+**An order's `payment_status` only flips to `Paid` once a `Payment` row reaches `PAID`
+status** — `Payment.on_update()` is the one place that ever sets it, via
+`frappe.get_doc("Order", self.order).db_set("payment_status", "Paid")` (bypasses
+`Order.validate()`/`reject_direct_edit`, the same trick the order-lifecycle actions use).
+`Order` never talks to payment logic directly — see `architecture.md` → Payments. For
+online payments (Slice 8), that transition will be driven by a server-verified
 callback/webhook/reconciliation call, **never** by the customer's browser reaching a
-"success" redirect page. See architecture.md → Payments for the abstraction boundary.
+"success" redirect page.
+
+**A `Payment` is an immutable financial record.** Like `Order.reject_direct_edit`,
+`Payment.reject_direct_edit` unconditionally rejects any `.save()` on a non-new
+`Payment`, admins included. Unlike `Order`, `has_permission_payment` never needs to grant
+restaurant staff broad "write" — `Payment` exposes no whitelisted instance methods (only
+the module-level `confirm_manual_payment`), so there's no `run_method`-convention reason
+to widen it; base `DocType` permissions already withhold `create`/`write`/`delete` from
+`Restaurant Staff` entirely, and `has_permission_payment` only ever grants `read`. See
+`permissions.md` → "Payment: no write, no run_method carve-out" for the full comparison
+against `Order`'s permission shape.
+
+**Double-payment and closed-order guards**: `link_and_validate_order` also rejects
+recording a payment against an order whose `payment_status` is already `Paid`, or whose
+`status` is `CANCELLED`/`REJECTED`. No restriction is placed on *which* order status
+payment may be confirmed at (e.g. it isn't limited to `COMPLETED`) — real restaurants
+collect payment at different points in the flow (upfront, at serving, at the register
+after), and `Order.payment_method` (chosen by the customer at submission) is a hint for
+staff, not a gate on when `confirm_manual_payment` may run.
 
 ## Explicitly deferred / not modeled in v1
 
 - Billing/subscription payment integration (Owner Subscription assignment is manual).
 - Menu item variants and add-ons.
 - Real online payment gateway integration (Slice 8 ships a mock/test provider only).
+- Payment refunds/reversals and split/partial payments — `confirm_manual_payment` always
+  records the order's full total; no concrete need for partial capture exists yet.
 - `Restaurant Settings` as a separate DocType — not introduced until a concrete need
   for restaurant-level configuration beyond what fits on `Restaurant` itself appears
   (per the "don't add abstractions before the pattern exists" principle).

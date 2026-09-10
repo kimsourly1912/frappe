@@ -37,5 +37,33 @@ frappe.ui.form.on("Order", {
 				});
 			});
 		});
+
+		// Payment is a separate DocType (Payment) driving payment_status -- Order
+		// never records payments itself, see docs/architecture.md -> Payments. This
+		// calls a plain whitelisted function (frappe.call), not a document method
+		// (frm.call), since confirm_manual_payment creates a new Payment rather than
+		// acting on this Order.
+		const paid = frm.doc.payment_status === "Paid";
+		const closedOut = ["CANCELLED", "REJECTED"].includes(frm.doc.status);
+		if (!paid && !closedOut) {
+			frm.add_custom_button(__("Confirm Payment"), () => {
+				frappe.prompt(
+					{
+						fieldname: "method",
+						fieldtype: "Select",
+						options: "CASH\nCARD\nOTHER",
+						label: __("Payment Method"),
+						reqd: 1,
+					},
+					(values) => {
+						frappe.call({
+							method: "e_menu.e_menu.doctype.payment.payment.confirm_manual_payment",
+							args: { order: frm.doc.name, method: values.method },
+						}).then(() => frm.reload_doc());
+					},
+					__("Confirm Payment for {0}", [frm.doc.name])
+				);
+			});
+		}
 	},
 });

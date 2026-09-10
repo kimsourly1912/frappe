@@ -1,13 +1,15 @@
 # Permissions: platform vs. restaurant-level
 
-> **Status:** Slice 6 — every layer below is implemented: `System Manager` (platform),
+> **Status:** Slice 7 — every layer below is implemented: `System Manager` (platform),
 > `Restaurant Owner` (SaaS account-level), `Restaurant Member` with its per-restaurant
 > `OWNER`/`MANAGER`/`CASHIER`/`KITCHEN` roles plus the `Restaurant Staff` Frappe Role,
-> and customer-facing `Guest` access (QR resolution, menu browsing, now order
-> submission). `Order` (Slice 6) needed a genuinely different `has_permission` shape
-> from every other restaurant-scoped DocType — see "Order: action-based writes, not
-> field-based" below, a new, important addition if you've read this file before. Three
-> Frappe Roles exist (`System Manager`, `Restaurant Owner`, `Restaurant Staff`)
+> customer-facing `Guest` access (QR resolution, menu browsing, order submission), and
+> now staff-facing manual payment confirmation. `Order` (Slice 6) needed a genuinely
+> different `has_permission` shape from every other restaurant-scoped DocType — see
+> "Order: action-based writes, not field-based" below. `Payment` (Slice 7) is different
+> again — neither the plain `_restaurant_scoped_has_permission` shape nor `Order`'s
+> broadened-`"write"` shape — see "Payment: no write, no run_method carve-out" below.
+> Three Frappe Roles exist (`System Manager`, `Restaurant Owner`, `Restaurant Staff`)
 > alongside the *separate* concept of a `Restaurant Member.role` value — see the "Don't
 > confuse these" callouts below if you're new to this file.
 
@@ -209,6 +211,41 @@ method at all. Two things do the actual, meaningful authorization:
 Neither of those is expressible as a `has_permission` boolean — this is exactly the
 "if a DocType needs different read/write boundaries... write that DocType's own
 `has_permission` function" case this section already anticipated before Slice 6 landed.
+
+### Payment: no write, no run_method carve-out — *Slice 7*
+
+`Payment` looks superficially like `Order` (restaurant-scoped, an immutable-after-
+creation financial record with its own `reject_direct_edit`) but needs neither of
+`Order`'s two special-cases, for one reason: **`Payment` exposes no whitelisted
+*instance* methods.** Creation goes through a plain module-level function,
+`confirm_manual_payment(order, method)` — there is no `payment_doc.confirm()` called via
+`frm.call()`/`run_method`, so the Frappe-framework requirement that forced `Order` to
+grant `"write"` broadly (see above) simply doesn't apply here. `has_permission_payment`
+is close to the original, plain `_restaurant_scoped_has_permission` shape, but even more
+restrictive: it grants **`"read"` only** — never `"write"`, `"create"`, or `"delete"`,
+to anyone but a platform admin. Base `DocType` permissions already withhold
+`create`/`write`/`delete` from `Restaurant Staff` at the grid level (`Payment.json`'s
+`Restaurant Staff` row only sets `read`/`report`), so `has_permission_payment`'s job is
+purely the paired query-level read scoping via
+`get_permission_query_conditions_for_payment`.
+
+This means **every** `Payment` row, for every restaurant, is created exactly one way:
+`confirm_manual_payment`, with `ignore_permissions=True`, after its own manual role
+check (`get_active_restaurant_role(user, order.restaurant) in CONFIRM_ROLES` —
+`OWNER`/`MANAGER`/`CASHIER`, the same front-of-house set as `Order`'s cashier-type
+actions; `KITCHEN` is never in it). A bare `@frappe.whitelist()` function — like
+`submit_order` before it — gets no DocType permission check for free; the function has
+to check authorization itself, which is exactly what it does before ever constructing
+the document.
+
+`Payment.link_and_validate_order` (`validate()`, insert-only) is the defense-in-depth
+layer underneath that: it re-derives `restaurant` and `amount` from the `order` row
+itself on every insert, regardless of caller, and rejects recording a payment against an
+order that's already `Paid` or that's `CANCELLED`/`REJECTED`. Even a direct
+`frappe.get_doc({"doctype": "Payment", ...}).insert(ignore_permissions=True)` with a
+manipulated `amount` gets that value silently overwritten — there's no code path,
+authorized or not, that produces a `Payment` whose `amount` didn't come from the order's
+own server-computed `total`.
 
 ### Cross-restaurant reference integrity — *implemented, Slice 3*
 

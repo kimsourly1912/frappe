@@ -119,13 +119,19 @@ place (`Order.snapshot_and_calculate_items`) — a client-supplied price or tota
 never read at all, let alone trusted. See `domain-model.md` → `Order / Order Item` for
 the full design.
 
-## Payments
+## Payments — *manual confirmation implemented, Slice 7*
 
 Payment provider integration is provider-neutral by design: a `Payment` DocType records
 `provider`, `provider_reference`, `method`, `amount`, `status`, decoupled from `Order`
-lifecycle logic. `Order` never talks to a payment gateway directly — a payment provider
-plugs in behind the `Payment` boundary. See [domain-model.md](domain-model.md) for the
-planned shape; the abstraction is built in Slice 8, manual payment first in Slice 7.
+lifecycle logic — `Order` never talks to a payment gateway directly, and the only place
+`Order.payment_status` is ever set is `Payment.on_update()`. Slice 7 implements the
+`MANUAL` side of this boundary: a restaurant-role-gated `confirm_manual_payment(order,
+method)` creates an already-`PAID` `Payment` row (cash/card-in-hand confirmation is
+synchronous — there's no pending phase to model yet). The provider-plugin side (named
+online providers, async `PENDING → PAID/FAILED` transitions driven by a server-verified
+webhook — never the customer's browser reaching a "success" redirect page) is Slice 8;
+`Payment.status`/`provider` are already shaped to support it without a schema change.
+See [domain-model.md](domain-model.md) → `Payment` for the full design.
 
 ## Customer-facing UI — *implemented, Slice 5*
 

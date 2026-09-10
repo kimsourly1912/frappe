@@ -184,3 +184,23 @@ def has_permission_order(doc, ptype: str | None = None, user: str | None = None)
 	if ptype not in ("read", "write"):
 		return False
 	return get_active_restaurant_role(user, doc.restaurant) is not None
+
+
+def get_permission_query_conditions_for_payment(user: str | None = None) -> str:
+	return _restaurant_scoped_query_conditions("Payment", user)
+
+
+def has_permission_payment(doc, ptype: str | None = None, user: str | None = None) -> bool:
+	"""Unlike Order, Payment exposes no whitelisted instance methods -- creation is
+	a module-level function (confirm_manual_payment, ignore_permissions=True with
+	its own role check) and Payment.reject_direct_edit blocks every resave -- so
+	there's no run_method-style reason to grant "write" here. This only ever grants
+	"read" to active restaurant staff; base DocType permissions already withhold
+	create/write/delete from Restaurant Staff, and this hook adds the matching
+	query-level read scoping (paired with get_permission_query_conditions_for_payment)."""
+	user = user or frappe.session.user
+	if is_platform_admin(user):
+		return True
+	if ptype != "read":
+		return False
+	return get_active_restaurant_role(user, doc.restaurant) is not None

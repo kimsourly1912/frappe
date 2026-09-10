@@ -9,12 +9,14 @@ E-menu is built as a custom [Frappe](https://frappeframework.com) app (`e_menu`)
 of Frappe Framework v15. It reuses Frappe's authentication, users, roles, permissions,
 DocTypes, REST API, background jobs, and Desk admin UI instead of rebuilding them.
 
-**Status:** Slice 6 (ordering) complete. Customers can scan a table's QR, browse a
-live mobile-first menu (`/menu/<public_id>/<table_token>`), and submit a real order
+**Status:** Slice 7 (manual payment) complete. Customers can scan a table's QR, browse
+a live mobile-first menu (`/menu/<public_id>/<table_token>`), and submit a real order
 with server-computed, currency-safe totals — no login, no Desk. Restaurant staff see
 incoming orders and move them through an explicit lifecycle
 (`PENDING → ACCEPTED → PREPARING → READY → SERVED → COMPLETED`, plus `REJECTED`/
-`CANCELLED`) via role-gated action buttons on the standard Desk form. See
+`CANCELLED`) via role-gated action buttons on the standard Desk form, and confirm
+manual (cash/card) payment against an order — recorded as an immutable `Payment` row
+that's the only thing that ever flips `Order.payment_status` to `Paid`. See
 [docs/development.md](docs/development.md) for the delivery plan and what's next.
 
 ## Repository scope
@@ -49,7 +51,8 @@ how to stand up a bench locally that installs this app.
 │       │   ├── menu_item/
 │       │   ├── restaurant_table/    # + resolve_qr() whitelisted, allow_guest API
 │       │   ├── order/               # + submit_order() (Guest) + accept/reject/... actions
-│       │   └── order_item/          # child table of Order
+│       │   ├── order_item/          # child table of Order
+│       │   └── payment/             # + confirm_manual_payment() -- sets Order.payment_status
 │       ├── testing.py         # shared test fixtures (owner/staff/restaurant helpers)
 │       └── demo.py
 ├── docs/

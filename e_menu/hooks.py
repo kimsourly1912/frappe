@@ -151,6 +151,7 @@ permission_query_conditions = {
 	"Menu Item": "e_menu.permissions.get_permission_query_conditions_for_menu_item",
 	"Restaurant Table": "e_menu.permissions.get_permission_query_conditions_for_restaurant_table",
 	"Order": "e_menu.permissions.get_permission_query_conditions_for_order",
+	"Payment": "e_menu.permissions.get_permission_query_conditions_for_payment",
 }
 
 has_permission = {
@@ -161,6 +162,7 @@ has_permission = {
 	"Menu Item": "e_menu.permissions.has_permission_menu_item",
 	"Order": "e_menu.permissions.has_permission_order",
 	"Restaurant Table": "e_menu.permissions.has_permission_restaurant_table",
+	"Payment": "e_menu.permissions.has_permission_payment",
 }
 
 # DocType Class
