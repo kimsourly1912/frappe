@@ -1,0 +1,103 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "RT-.#####",
+ "creation": "2026-09-10 09:48:16.537285",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "restaurant",
+  "table_name",
+  "status",
+  "qr_token",
+  "qr_code",
+  "menu_url"
+ ],
+ "fields": [
+  {
+   "fieldname": "restaurant",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Restaurant",
+   "options": "Restaurant",
+   "reqd": 1
+  },
+  {
+   "fieldname": "table_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Table Name",
+   "reqd": 1
+  },
+  {
+   "default": "Active",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Active\nInactive",
+   "reqd": 1
+  },
+  {
+   "description": "Secure, unguessable, table-specific identifier used in the public QR URL. Generated automatically; never the internal document name.",
+   "fieldname": "qr_token",
+   "fieldtype": "Data",
+   "label": "QR Token",
+   "read_only": 1,
+   "unique": 1
+  },
+  {
+   "description": "Auto-generated. Encodes the public menu URL for this table -- print and place on the table.",
+   "fieldname": "qr_code",
+   "fieldtype": "Attach Image",
+   "label": "QR Code",
+   "read_only": 1
+  },
+  {
+   "description": "The URL the QR code encodes, shown for convenience (e.g. to copy/share without scanning).",
+   "fieldname": "menu_url",
+   "fieldtype": "Data",
+   "label": "Menu URL",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-09-10 09:48:16.537285",
+ "modified_by": "Administrator",
+ "module": "E Menu",
+ "name": "Restaurant Table",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Restaurant Staff",
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

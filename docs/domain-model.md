@@ -1,10 +1,11 @@
 # Domain model
 
-> **Status:** Slice 3 — `Subscription Plan`, `Owner Subscription`, `Restaurant`,
-> `Restaurant Member`, `Menu Category`, and `Menu Item` are implemented (fields/behavior
-> below reflect actual code, not just the plan). Everything else is still the planned
-> shape baselined from the product spec, to be implemented incrementally (noted
-> per-entity below) — treat those field lists as a starting point, not a frozen schema.
+> **Status:** Slice 4 — `Subscription Plan`, `Owner Subscription`, `Restaurant`,
+> `Restaurant Member`, `Menu Category`, `Menu Item`, and `Restaurant Table` are
+> implemented (fields/behavior below reflect actual code, not just the plan). Everything
+> else is still the planned shape baselined from the product spec, to be implemented
+> incrementally (noted per-entity below) — treat those field lists as a starting point,
+> not a frozen schema.
 
 ## Entity-relationship overview
 
@@ -230,12 +231,40 @@ Variants/add-ons are intentionally not modeled in v1; the schema doesn't need to
 anticipate them beyond "don't do anything that would make adding them later a rewrite"
 (e.g. don't hardcode a single flat price string anywhere outside `Menu Item.price`).
 
-### Restaurant Table — *Slice 4*
-`qr_token` is a separate, randomly-generated, unguessable string — **not** the Frappe
-document `name`/internal ID. Deactivating a table (status → Inactive) rather than
-deleting it preserves historical `Order` references (Frappe's link-field
-`on_delete` behavior would otherwise either block deletion or null out history —
-soft-deactivation avoids both problems and matches the product requirement directly).
+### Restaurant Table — *Slice 4, implemented*
+Fields: `restaurant`, `table_name` (unique per restaurant, same pattern as `Menu
+Category.category_name`), `status` (`Active`/`Inactive`), `qr_token` (read-only, a
+24-char random hash — more entropy than `Restaurant.public_id`'s 16, because this token
+is the closest thing an anonymous customer has to an authorization credential in Slices
+5+, not just an anti-enumeration measure), `qr_code` (`Attach Image`, auto-generated),
+`menu_url` (read-only, the exact URL the QR encodes, shown for convenience/copy-paste).
+
+`qr_token` is generated once in `before_insert` and never changes — it is **not** the
+Frappe document `name`/internal ID (same reasoning as `Restaurant.public_id`: never
+expose sequential internal IDs publicly). Deactivating a table (`status → Inactive`)
+rather than deleting it is what will preserve historical `Order` references once `Order`
+exists (Slice 6) — Frappe's link-field `on_delete` behavior would otherwise either block
+deletion or null out history; soft-deactivation avoids both problems and matches the
+product requirement directly. (Deletion is technically still permitted for `OWNER`/
+`MANAGER` in Slice 4, since nothing references a table yet — this will need revisiting
+once `Order` links to `Restaurant Table`, likely by removing `delete` from the base
+`Restaurant Staff` permission grant.)
+
+`generate_qr_code()` (`Restaurant Table.after_insert`) renders the QR with the
+[`qrcode`](https://pypi.org/project/qrcode/) package — pinned in `pyproject.toml` — and
+stores it as a public `File` attached to the `qr_code` field, encoding
+`{site_url}/menu/{restaurant.public_id}/{table.qr_token}` (via `frappe.utils.get_url()`,
+not a hardcoded domain). This is a small, well-established dependency, not a custom QR
+encoder — Frappe has no native QR generation and hand-rolling one would be absurd.
+
+**`resolve_qr(public_id, table_token)`** (whitelisted, `allow_guest=True`, in
+`restaurant_table.py`) is the server-side mechanism behind the Slice 4 acceptance
+criterion: it resolves exactly one active `Restaurant` + `Restaurant Table`, or fails
+with the *same generic error* for every failure case (unknown `public_id`, unknown or
+mismatched `table_token`, an inactive restaurant, or an inactive table) — deliberately
+not distinguishing *why* it failed, so a client can't enumerate restaurants/tables by
+probing. This function only resolves identity; it deliberately does **not** render a
+menu or any customer-facing page — that's Slice 5's scope, built on top of this.
 
 ### Order / Order Item — *Slice 6*
 **Order Item will be a child table of Order**, not an independent top-level DocType.

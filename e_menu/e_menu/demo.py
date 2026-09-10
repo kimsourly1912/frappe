@@ -7,6 +7,7 @@
 import frappe
 
 from e_menu.e_menu.doctype.restaurant_member.restaurant_member import invite_staff
+from e_menu.e_menu.doctype.restaurant_table.restaurant_table import resolve_qr
 
 DEMO_OWNER_EMAIL = "owner@example.com"
 DEMO_OWNER_PASSWORD = "e_menu_demo"
@@ -35,10 +36,12 @@ def create_demo_data():
 	demonstrate_limit_enforcement(subscription)
 	create_demo_staff(restaurant)
 	create_demo_menu(restaurant)
+	tables = create_demo_tables(restaurant)
 
 	second_owner, second_restaurant = create_second_demo_restaurant()
 	demonstrate_cross_restaurant_isolation(restaurant, second_restaurant)
 	demonstrate_cross_restaurant_menu_reference_rejected(restaurant, second_restaurant)
+	demonstrate_qr_resolution(restaurant, tables["T01"])
 
 	frappe.db.commit()
 	print("\nDemo data ready.")
@@ -46,6 +49,8 @@ def create_demo_data():
 	for email, role, *_rest in DEMO_STAFF:
 		print(f"{role.title():<8} {email} / {DEMO_STAFF_PASSWORD}  ({restaurant.restaurant_name})")
 	print(f"Owner:   {second_owner} / {DEMO_OWNER_PASSWORD}  ({second_restaurant.restaurant_name})")
+	for table_name, table in tables.items():
+		print(f"Table {table_name}: {table.menu_url}")
 
 
 def create_plans():
@@ -328,5 +333,50 @@ def demonstrate_cross_restaurant_menu_reference_rejected(restaurant_a, restauran
 		)
 	else:
 		print("WARNING: cross-restaurant category reference was NOT rejected -- integrity check may be broken.")
+	finally:
+		frappe.set_user("Administrator")
+
+
+def create_demo_tables(restaurant):
+	frappe.set_user(restaurant.owner_user)
+	try:
+		tables = {}
+		for table_name in ("T01", "T02"):
+			existing = frappe.db.exists(
+				"Restaurant Table", {"restaurant": restaurant.name, "table_name": table_name}
+			)
+			if existing:
+				tables[table_name] = frappe.get_doc("Restaurant Table", existing)
+				continue
+			table = frappe.get_doc(
+				{
+					"doctype": "Restaurant Table",
+					"restaurant": restaurant.name,
+					"table_name": table_name,
+				}
+			).insert()
+			tables[table_name] = table
+			print(f"Created Restaurant Table '{table_name}' for {restaurant.restaurant_name}: {table.menu_url}")
+	finally:
+		frappe.set_user("Administrator")
+	return tables
+
+
+def demonstrate_qr_resolution(restaurant, table):
+	"""Proves the Slice 4 acceptance criterion live: scanning table T01's QR
+	resolves exactly one active Restaurant + Table, and a bad/deactivated token
+	fails safely with a generic error (no restaurant/table enumeration)."""
+	frappe.set_user("Guest")
+	try:
+		result = resolve_qr(restaurant.public_id, table.qr_token)
+		print(
+			f"Confirmed QR resolution -- table {table.table_name}'s QR resolves to "
+			f"{result['restaurant_name']} / {result['table_name']}."
+		)
+		try:
+			resolve_qr(restaurant.public_id, "not-a-real-token")
+			print("WARNING: an invalid table token was NOT rejected -- QR resolution may be broken.")
+		except frappe.DoesNotExistError:
+			print("Confirmed invalid QR tokens fail safely (generic 'not found', no enumeration).")
 	finally:
 		frappe.set_user("Administrator")

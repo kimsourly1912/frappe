@@ -161,9 +161,10 @@ every restaurant-scoped DocType's own hook functions:
 This assumes `restaurant` is a **plain field**, populated directly from the request —
 not a `fetch_from` field like `Restaurant.owner_user`, which isn't populated yet at the
 point Frappe checks create-permission (see `Restaurant`'s entry above for why that one
-needed a `ptype == "create"` special case instead). When adding the next
-restaurant-scoped DocType (`Restaurant Table` in Slice 4, `Order` in Slice 6, ...):
-reuse these two helpers directly, don't reintroduce the SQL/role-check inline — and if a
+needed a `ptype == "create"` special case instead). `Restaurant Table` (Slice 4) reused
+both helpers with zero new permission code — confirming the pattern holds for a fifth
+DocType. When adding the next one (`Order` in Slice 6, ...): reuse these two helpers
+directly, don't reintroduce the SQL/role-check inline — and if a
 DocType needs different read/write boundaries than "any staff / OWNER+MANAGER" (e.g.
 `Order` will likely need `KITCHEN` to *write* certain order-status transitions), write
 that DocType's own `has_permission` function rather than forcing it through the shared
@@ -179,20 +180,32 @@ invariants of the data model, not permissions per se — the check runs even for
 platform admin, unlike every authorization check above. See `domain-model.md` for the
 specific integrity rules per DocType.
 
-## Customer-facing (unauthenticated) access
+## Customer-facing (unauthenticated) access — *token resolution implemented, Slice 4*
 
 Customers never log in — requests from the QR/menu/ordering flow run as Frappe's
 built-in `Guest` role. Their "authorization" isn't role-based at all: it's **scoped by
-possession of a valid table QR token**. The public menu/order endpoints:
+possession of a valid table QR token**.
 
-- resolve `restaurant` + `table` strictly from the `qr_token` in the URL (never from a
-  client-supplied restaurant/table ID directly — the token is the only trusted input),
-- reject if the token doesn't match an active table on an active restaurant,
-- allow only a narrow set of actions (browse active categories/available items, submit
-  an order to *that* table) — nothing else on the `Restaurant`/`Menu Item`/etc. DocTypes
-  is reachable by `Guest`.
+`resolve_qr(public_id, table_token)` (`e_menu.e_menu.doctype.restaurant_table
+.restaurant_table.resolve_qr`, `@frappe.whitelist(allow_guest=True)`) is this
+mechanism's server-side entry point today:
 
-Full mechanics land in Slice 4 (QR/token design) and Slice 5 (public menu routes).
+- resolves `restaurant` + `table` strictly from the `public_id`/`qr_token` in the
+  request (never from a client-supplied internal document ID directly — the token pair
+  is the only trusted input),
+- rejects if either side doesn't match an **active** restaurant and an **active**
+  table belonging to *that* restaurant, with one identical generic error for every
+  failure case (see `domain-model.md` for why — no enumeration by probing),
+- is reachable with **zero cookies/session** (verified live: a plain unauthenticated
+  `curl` succeeds for a valid token pair, HTTP 404 for an invalid one).
+
+It only resolves *identity* — it doesn't return menu contents or accept an order. Slice
+5 builds the actual public menu page (browse categories/items) on top of this
+resolution; Slice 6 will add order submission, similarly scoped to `Guest` and to
+*that* resolved `(restaurant, table)` pair, never a client-supplied one. Once those
+land, the narrow-actions list this section originally sketched (browse
+active/available items, submit an order to *that* table, nothing else reachable on
+`Restaurant`/`Menu Item`/etc. by `Guest`) becomes the thing to verify against.
 
 ## Frappe v15/v16 custom permission "actions"
 

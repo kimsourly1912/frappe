@@ -316,10 +316,49 @@ check on `Menu Item.category` (see `domain-model.md`).
 Test fixtures shared across three-plus doctype test files (owner/staff/restaurant setup)
 were extracted into `e_menu/e_menu/testing.py` at this point, replacing per-file copies.
 
-## What's next: Slice 4
+## Tables and QR: what's built in Slice 4
 
-Slice 4 implements tables and QR codes: `Restaurant Table` with a secure, unguessable
-`qr_token` (never the sequential internal document name), QR code generation, and the
-public QR URL shape. Acceptance: scanning a QR resolves exactly one active
-Restaurant + Table; invalid/deactivated tokens fail safely. See
-[domain-model.md](domain-model.md) for the planned shape.
+`Restaurant Table` (`e_menu/e_menu/doctype/restaurant_table/`) reuses the same
+authorization mechanism as Menu Category/Item -- nothing new there. What's new:
+- A `qr_token` generated once (`before_insert`), 24 random hex chars.
+- `qr_code` + `menu_url` generated once (`after_insert`) via the
+  [`qrcode`](https://pypi.org/project/qrcode/) package (added as a real dependency in
+  `pyproject.toml` -- Frappe has no native QR generation), stored as a public `File`.
+- `resolve_qr(public_id, table_token)`, a `@frappe.whitelist(allow_guest=True)` API that
+  is the server-side proof of the Slice 4 acceptance criterion -- see `domain-model.md`
+  and `permissions.md` for the fail-safe/no-enumeration design.
+
+## Verifying it runs (Slice 4 acceptance)
+
+```bash
+bench --site emenu.localhost execute e_menu.e_menu.demo.create_demo_data
+# -> (still idempotent) also creates tables T01/T02 for Angkor Cafe with generated
+#    QR codes, and prints confirmation that T01's QR resolves correctly and an
+#    invalid token fails safely
+
+bench --site emenu.localhost run-tests --app e_menu
+# -> Ran 54 tests ... OK
+#    (39 from Slices 1-3, plus: owner/manager can create tables, cashier/kitchen
+#    cannot, table names unique per restaurant but may repeat across restaurants,
+#    qr_token has real entropy and is never the document name, qr_code/menu_url
+#    are generated and match, tenant isolation, and the core acceptance test:
+#    resolve_qr succeeds for an active restaurant+table and fails identically
+#    (generic 404) for a wrong token, unknown public_id, inactive table, inactive
+#    restaurant, or a token/restaurant mismatch)
+```
+
+Also verified live over real HTTP during Slice 4, with **zero cookies** (true `Guest`
+access, matching what an actual QR scan does): `GET
+/api/method/.../resolve_qr?public_id=...&table_token=...` returns HTTP 200 with the
+resolved restaurant/table for a valid pair and HTTP 404 with a generic message for an
+invalid one; the generated QR image (`GET /files/<table>-qr.png`) is fetched
+unauthenticated and confirmed to be a valid, scannable 450×450 PNG.
+
+## What's next: Slice 5
+
+Slice 5 implements the customer-facing public menu: a mobile-first web experience
+(no Desk, no login) where scanning a table's QR — resolved via `resolve_qr` (Slice 4)
+— leads to browsing that restaurant's active categories and available items and
+building a cart. See [domain-model.md](domain-model.md) and `architecture.md` →
+Customer-facing UI for the planned shape; the concrete mechanism (server-rendered Jinja
+`www/` pages vs. a bundled JS entry point) is decided at the start of that slice.

@@ -149,3 +149,11 @@ def get_permission_query_conditions_for_menu_item(user: str | None = None) -> st
 
 def has_permission_menu_item(doc, ptype: str | None = None, user: str | None = None) -> bool:
 	return _restaurant_scoped_has_permission(doc, ptype, user)
+
+
+def get_permission_query_conditions_for_restaurant_table(user: str | None = None) -> str:
+	return _restaurant_scoped_query_conditions("Restaurant Table", user)
+
+
+def has_permission_restaurant_table(doc, ptype: str | None = None, user: str | None = None) -> bool:
+	return _restaurant_scoped_has_permission(doc, ptype, user)

@@ -9,11 +9,10 @@ E-menu is built as a custom [Frappe](https://frappeframework.com) app (`e_menu`)
 of Frappe Framework v15. It reuses Frappe's authentication, users, roles, permissions,
 DocTypes, REST API, background jobs, and Desk admin UI instead of rebuilding them.
 
-**Status:** Slice 3 (menu management) complete. `Subscription Plan`, `Owner
-Subscription`, `Restaurant`, `Restaurant Member` (staff roles: OWNER/MANAGER/
-CASHIER/KITCHEN), `Menu Category`, and `Menu Item` are implemented, with server-side
-restaurant-limit enforcement, tenant-isolated access down to individual staff members,
-and cross-restaurant menu-reference rejection. See
+**Status:** Slice 4 (tables and QR) complete. `Subscription Plan`, `Owner Subscription`,
+`Restaurant`, `Restaurant Member` (staff roles: OWNER/MANAGER/CASHIER/KITCHEN), `Menu
+Category`, `Menu Item`, and `Restaurant Table` (with QR code generation and safe,
+unauthenticated QR-token resolution) are implemented. See
 [docs/development.md](docs/development.md) for the delivery plan and what's next.
 
 ## Repository scope
@@ -42,7 +41,8 @@ how to stand up a bench locally that installs this app.
 │       │   ├── restaurant/
 │       │   ├── restaurant_member/   # + invite_staff() whitelisted API
 │       │   ├── menu_category/
-│       │   └── menu_item/
+│       │   ├── menu_item/
+│       │   └── restaurant_table/    # + resolve_qr() whitelisted, allow_guest API
 │       ├── testing.py         # shared test fixtures (owner/staff/restaurant helpers)
 │       └── demo.py
 ├── docs/

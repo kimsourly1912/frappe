@@ -10,6 +10,7 @@ license = { text = "Proprietary" }
 dynamic = ["version"]
 dependencies = [
     # "frappe~=15.0.0" # Installed and managed by bench.
+    "qrcode~=8.0", # generates the printable QR image for Restaurant Table.qr_code
 ]
 
 [build-system]
