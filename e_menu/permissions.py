@@ -157,3 +157,30 @@ def get_permission_query_conditions_for_restaurant_table(user: str | None = None
 
 def has_permission_restaurant_table(doc, ptype: str | None = None, user: str | None = None) -> bool:
 	return _restaurant_scoped_has_permission(doc, ptype, user)
+
+
+def get_permission_query_conditions_for_order(user: str | None = None) -> str:
+	return _restaurant_scoped_query_conditions("Order", user)
+
+
+def has_permission_order(doc, ptype: str | None = None, user: str | None = None) -> bool:
+	"""Deliberately NOT built on _restaurant_scoped_has_permission: unlike Menu/
+	Table, "write" here doesn't mean "can edit fields" -- Order.validate()
+	(reject_direct_edit) unconditionally blocks saving an existing Order no matter
+	who's asking, admins included. "write" is granted broadly to any active staff
+	member purely because Frappe's own run_method REST/Desk convention
+	(frappe/api/v1.py execute_doc_method, and Desk's frm.call()) requires
+	has_permission("write") just to *invoke* a whitelisted instance method --
+	without it, staff couldn't call accept()/mark_ready()/etc. at all. The actual
+	per-action role check (who may call *which* action) happens inside
+	Order._transition via ACTION_ROLES; reject_direct_edit is what stops this
+	broad "write" grant from becoming a generic PATCH endpoint for order
+	contents. Order is created by the customer (submit_order, Guest,
+	ignore_permissions=True after its own QR-based resolution) -- no restaurant
+	role ever gets "create" here."""
+	user = user or frappe.session.user
+	if is_platform_admin(user):
+		return True
+	if ptype not in ("read", "write"):
+		return False
+	return get_active_restaurant_role(user, doc.restaurant) is not None

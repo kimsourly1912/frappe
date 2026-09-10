@@ -250,17 +250,64 @@
 		.cart-drawer-footer {
 			padding: 14px 20px 18px;
 			border-top: 1px solid var(--border);
+		}
+		.cart-drawer-footer .totals-row {
 			display: flex;
 			align-items: center;
 			justify-content: space-between;
 			font-weight: 700;
+			margin-bottom: 12px;
 		}
-		.cart-drawer-footer .note {
-			font-weight: 400;
-			font-size: 0.75rem;
-			color: var(--muted);
-			display: block;
-			margin-top: 2px;
+		.submit-btn {
+			width: 100%;
+			background: var(--accent);
+			color: #fff;
+			border: none;
+			border-radius: 12px;
+			padding: 14px;
+			font-size: 1rem;
+			font-weight: 700;
+			cursor: pointer;
+		}
+		.submit-btn:disabled { opacity: 0.55; cursor: default; }
+		.submit-error {
+			color: #c0392b;
+			font-size: 0.8rem;
+			margin-top: 10px;
+			text-align: center;
+		}
+
+		/* ---- order confirmation ---- */
+		.confirmation-screen {
+			position: fixed;
+			inset: 0;
+			background: var(--bg);
+			z-index: 30;
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			text-align: center;
+			padding: 32px 24px;
+		}
+		/* Author `display: flex` above otherwise beats the UA [hidden] rule at
+		   equal specificity, leaving the overlay in the layout (and eating
+		   clicks) even while the `hidden` attribute is set. */
+		.confirmation-screen[hidden] { display: none; }
+		.confirmation-screen .icon { font-size: 56px; margin-bottom: 12px; }
+		.confirmation-screen h1 { font-size: 1.3rem; margin: 0 0 8px; }
+		.confirmation-screen p { color: var(--muted); margin: 4px 0; }
+		.confirmation-screen .order-number { font-weight: 700; color: var(--accent); }
+		.confirmation-screen button {
+			margin-top: 22px;
+			background: var(--accent);
+			color: #fff;
+			border: none;
+			border-radius: 999px;
+			padding: 12px 24px;
+			cursor: pointer;
+			font-size: 0.9rem;
+			font-weight: 600;
 		}
 	</style>
 </head>
@@ -327,12 +374,21 @@
 		</div>
 		<div class="cart-items" id="cart-items"></div>
 		<div class="cart-drawer-footer">
-			<div>
-				{{ _("Total") }}
-				<span class="note">{{ _("Ordering isn't available yet -- ask staff when you're ready.") }}</span>
+			<div class="totals-row">
+				<span>{{ _("Total") }}</span>
+				<span id="cart-footer-total">0.00</span>
 			</div>
-			<div id="cart-footer-total">0.00</div>
+			<button type="button" class="submit-btn" id="submit-order-btn">{{ _("Submit Order") }}</button>
+			<div class="submit-error" id="submit-error" hidden></div>
 		</div>
+	</div>
+
+	<div class="confirmation-screen" id="confirmation-screen" hidden>
+		<div class="icon">✅</div>
+		<h1>{{ _("Order sent!") }}</h1>
+		<p>{{ _("Order") }} <span class="order-number" id="confirmation-order-number"></span></p>
+		<p>{{ _("The restaurant has received your order and will confirm it shortly.") }}</p>
+		<button type="button" id="confirmation-close">{{ _("Back to menu") }}</button>
 	</div>
 
 	<script>
@@ -434,6 +490,7 @@
 				}
 				var t = totals();
 				document.getElementById("cart-footer-total").textContent = money(t.total);
+				document.getElementById("submit-order-btn").disabled = keys.length === 0;
 			}
 
 			function escapeHtml(s) {
@@ -461,6 +518,67 @@
 			document.getElementById("cart-bar").addEventListener("click", openCart);
 			document.getElementById("cart-close").addEventListener("click", closeCart);
 			overlay.addEventListener("click", closeCart);
+
+			// public_id/table_token are always hex strings generated server-side --
+			// safe to interpolate directly, same reasoning as storageKey above.
+			var publicId = "{{ public_id }}";
+			var tableToken = "{{ table_token }}";
+			var submitBtn = document.getElementById("submit-order-btn");
+			var errorEl = document.getElementById("submit-error");
+
+			function submitOrder() {
+				var keys = Object.keys(cart);
+				if (keys.length === 0) return;
+
+				errorEl.hidden = true;
+				submitBtn.disabled = true;
+				submitBtn.textContent = "{{ _('Sending...') }}";
+
+				fetch("/api/method/e_menu.e_menu.doctype.order.order.submit_order", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						public_id: publicId,
+						table_token: tableToken,
+						payment_method: "MANUAL",
+						items: keys.map(function (key) {
+							return { menu_item: key, quantity: cart[key].qty };
+						}),
+					}),
+				})
+					.then(function (response) {
+						return response.json().then(function (body) {
+							if (!response.ok) throw body;
+							return body;
+						});
+					})
+					.then(function (body) {
+						cart = {};
+						save();
+						closeCart();
+						document.getElementById("confirmation-order-number").textContent = body.message.order;
+						document.getElementById("confirmation-screen").hidden = false;
+					})
+					.catch(function (err) {
+						var message =
+							(err && err._server_messages && JSON.parse(JSON.parse(err._server_messages)[0]).message) ||
+							"{{ _('Something went wrong submitting your order. Please try again.') }}";
+						errorEl.textContent = message;
+						errorEl.hidden = false;
+					})
+					.finally(function () {
+						submitBtn.disabled = Object.keys(cart).length === 0;
+						submitBtn.textContent = "{{ _('Submit Order') }}";
+					});
+			}
+
+			submitBtn.addEventListener("click", submitOrder);
+			document.getElementById("confirmation-close").addEventListener("click", function () {
+				document.getElementById("confirmation-screen").hidden = true;
+				document.querySelectorAll(".item").forEach(renderItemAction);
+				renderCartBar();
+				renderCartDrawer();
+			});
 		})();
 	</script>
 {% endif %}

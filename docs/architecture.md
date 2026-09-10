@@ -107,13 +107,17 @@ available and may be used later for finer-grained UI affordances, but the author
 check is always the server-side restaurant-membership-and-role check — never a UI-only
 gate.
 
-## Money and totals
+## Money and totals — *implemented, Slice 6*
 
-All currency fields use Frappe's `Currency`/`Float`-with-precision fields backed by
-`flt()`/decimal-safe rounding — never native floating point comparisons for money.
-Order totals are **always recomputed server-side** from the authoritative `Menu Item`
-price at order-submission time; a client-supplied price or total is never trusted (see
-`domain-model.md` → `Order Item` for the price-snapshot design once Slice 6 lands).
+All currency fields use Frappe's `Currency` fieldtype, backed by fixed-precision
+`decimal(21,9)` database columns (verified, not assumed — see `domain-model.md`) and
+`flt()`-rounded arithmetic — not native floating-point comparisons, and not Python's
+`decimal.Decimal` either (non-idiomatic here; Frappe's own native mechanism already
+satisfies "currency-safe" at the storage layer). Order totals are **always recomputed
+server-side** from the authoritative `Menu Item` price at order-submission time, in one
+place (`Order.snapshot_and_calculate_items`) — a client-supplied price or total is
+never read at all, let alone trusted. See `domain-model.md` → `Order / Order Item` for
+the full design.
 
 ## Payments
 

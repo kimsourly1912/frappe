@@ -6,6 +6,7 @@
 
 import frappe
 
+from e_menu.e_menu.doctype.order.order import submit_order
 from e_menu.e_menu.doctype.restaurant_member.restaurant_member import invite_staff
 from e_menu.e_menu.doctype.restaurant_table.restaurant_table import resolve_qr
 
@@ -42,6 +43,10 @@ def create_demo_data():
 	demonstrate_cross_restaurant_isolation(restaurant, second_restaurant)
 	demonstrate_cross_restaurant_menu_reference_rejected(restaurant, second_restaurant)
 	demonstrate_qr_resolution(restaurant, tables["T01"])
+
+	fried_rice = frappe.get_doc("Menu Item", {"restaurant": restaurant.name, "item_name": "Fried Rice"})
+	order = create_demo_order(restaurant, tables["T01"], fried_rice)
+	demonstrate_order_lifecycle(order)
 
 	frappe.db.commit()
 	print("\nDemo data ready.")
@@ -378,5 +383,74 @@ def demonstrate_qr_resolution(restaurant, table):
 			print("WARNING: an invalid table token was NOT rejected -- QR resolution may be broken.")
 		except frappe.DoesNotExistError:
 			print("Confirmed invalid QR tokens fail safely (generic 'not found', no enumeration).")
+	finally:
+		frappe.set_user("Administrator")
+
+
+def create_demo_order(restaurant, table, item):
+	"""A customer (Guest) submits an order -- idempotent by reusing any existing
+	order already on this table rather than piling up duplicates on re-runs."""
+	existing = frappe.db.exists("Order", {"restaurant": restaurant.name, "table": table.name})
+	if existing:
+		return frappe.get_doc("Order", existing)
+
+	frappe.set_user("Guest")
+	try:
+		result = submit_order(
+			restaurant.public_id,
+			table.qr_token,
+			[{"menu_item": item.name, "quantity": 2}],
+			payment_method="MANUAL",
+		)
+	finally:
+		frappe.set_user("Administrator")
+	order = frappe.get_doc("Order", result["order"])
+	print(
+		f"Customer submitted {order.name} at {restaurant.restaurant_name} table "
+		f"{table.table_name}: 2x {item.item_name} = ${order.total}"
+	)
+	return order
+
+
+def demonstrate_order_lifecycle(order):
+	"""Proves the Slice 6 acceptance criterion live: authorized staff move an
+	order through valid states (cashier accepts, kitchen prepares, cashier
+	serves/completes), and an invalid transition is rejected."""
+	if order.status != "PENDING":
+		print(f"{order.name} is already {order.status} -- skipping lifecycle demo (idempotent re-run).")
+		return
+
+	cashier, kitchen = "cashier@example.com", "kitchen@example.com"
+
+	frappe.set_user(cashier)
+	try:
+		order.accept()
+	finally:
+		frappe.set_user("Administrator")
+	print(f"Cashier accepted {order.name}")
+
+	frappe.set_user(kitchen)
+	try:
+		order.start_preparing()
+		order.mark_ready()
+	finally:
+		frappe.set_user("Administrator")
+	print(f"Kitchen moved {order.name}: PREPARING -> READY")
+
+	frappe.set_user(cashier)
+	try:
+		order.mark_served()
+		order.complete()
+	finally:
+		frappe.set_user("Administrator")
+	print(f"Cashier moved {order.name}: SERVED -> COMPLETED")
+
+	frappe.set_user(cashier)
+	try:
+		order.complete()
+	except frappe.ValidationError as e:
+		print(f"Confirmed invalid transition rejected -- can't complete a COMPLETED order: {e}")
+	else:
+		print("WARNING: an invalid order transition was NOT rejected -- state machine may be broken.")
 	finally:
 		frappe.set_user("Administrator")

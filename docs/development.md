@@ -396,15 +396,95 @@ mobile viewport (Playwright + the pre-installed Chromium): category browsing, ta
 a live count/total, the cart drawer opening with correct line items, and the cart
 surviving a full page reload via `localStorage`.
 
-## What's next: Slice 6
+## Order lifecycle: what's built in Slice 6
 
-Slice 6 implements ordering: `Order` and `Order Item` (child table -- see
-`domain-model.md` for why), with server-side price calculation (never trusting a
-client-supplied price or total), the explicit order-lifecycle state machine
-(`accept()`, `start_preparing()`, `mark_ready()`, `mark_served()`, `complete()`,
-`cancel()` -- no generic "PATCH status to anything" endpoint), a `Guest`-scoped order
-submission endpoint that reuses `resolve_qr`'s `(restaurant, table)` resolution, and a
-restaurant-side operational order view respecting the OWNER/MANAGER/CASHIER/KITCHEN
-role boundaries already established. Acceptance: a customer submits an order, staff see
-it, authorized staff move it through valid states, invalid transitions fail. This is
-also where the Slice 5 cart's "Submit Order" action gets wired up for real.
+`Order` and `Order Item` (`e_menu/e_menu/doctype/order/`, `.../order_item/`) implement
+real ordering on top of Slices 1-5. Key pieces:
+
+- `Order Item` is a child table (`istable=1`), not an independent DocType -- an order
+  and its lines are always created atomically, and there's no legitimate reason to
+  query line items independent of their order. See `domain-model.md` for the tradeoff.
+- **Server-computed totals, always.** `Order.snapshot_and_calculate_items()`
+  (`validate()`, insert-only) re-fetches each `Menu Item` fresh from the database and
+  snapshots `item_name_snapshot`/`unit_price_snapshot`/`line_total` onto the child row --
+  a client-supplied price or name is never read, let alone trusted. Verified with a
+  dedicated test that submits a cart with a manipulated price and confirms the stored
+  order uses the real menu price instead.
+- **`submit_order(public_id, table_token, items, payment_method)`** --
+  `@frappe.whitelist(allow_guest=True)` -- reuses `resolve_qr` (Slice 4) for the same
+  fail-safe `(restaurant, table)` resolution as the menu page, so there's exactly one
+  place that turns a QR pair into a trusted restaurant/table.
+- **Explicit named state-machine methods** -- `accept()`, `reject()`,
+  `start_preparing()`, `mark_ready()`, `mark_served()`, `complete()`, `cancel()`, each
+  role-gated (see `ACTION_ROLES` in `order.py`) and sharing one `_transition()` helper
+  that checks role + current status before calling `self.db_set("status", ...)`. No
+  generic "PATCH status to anything" endpoint exists. `db_set()` is used deliberately
+  over `save()` -- it bypasses `validate()` entirely (so a transition can never
+  accidentally re-run order-creation logic) while still keeping the in-memory document
+  and the `modified` timestamp consistent with the database.
+- **`reject_direct_edit()`** -- once an `Order` exists, `validate()` unconditionally
+  throws on any `.save()`, for anyone, admins included. The only legitimate way to
+  change an existing order is one of the named action methods above.
+
+**Important discovery, documented in full in `permissions.md`:** Frappe's `run_method`
+REST endpoint (`POST /api/resource/Order/<name>?run_method=accept`) and Desk's
+`frm.call()` both require `has_permission("write")` on the document *before* invoking
+any whitelisted instance method at all -- independent of what that method actually
+does. A narrower, read-only `has_permission_order` blocked every action button outright
+with a generic 403. The fix is to grant restaurant staff `write` at the permission-hook
+level (broad) while `reject_direct_edit()` enforces the real, narrow rule (no direct
+field edits, ever) at the controller level. These are two different layers doing two
+different jobs -- worth remembering before narrowing `has_permission` on any DocType
+that exposes whitelisted instance methods.
+- A Desk-side `order.js` adds status-appropriate action buttons (`frm.add_custom_button`
+  + `frm.call(method)`) to the standard Order form -- no custom Desk page needed.
+- The Slice 5 customer cart's "Submit Order" button now calls `submit_order` for real:
+  on success it clears the cart (`localStorage` included) and shows a confirmation
+  screen with the order number; on failure it surfaces Frappe's error message inline.
+  One CSS bug worth knowing about if you touch `menu.html`: an element hidden via the
+  `hidden` attribute stays hidden only if no author CSS rule on it also sets
+  `display: <anything but none>` -- author stylesheets beat the UA `[hidden] { display:
+  none }` rule at equal specificity. `.confirmation-screen` sets `display: flex` (to
+  center its content when shown), which silently defeated `hidden` and left the
+  full-screen overlay intercepting clicks even while "hidden". Fixed with an explicit
+  `.confirmation-screen[hidden] { display: none; }` override.
+
+## Verifying it runs (Slice 6 acceptance)
+
+```bash
+bench --site emenu.localhost execute e_menu.e_menu.demo.create_demo_data
+# -> (still idempotent) also places a demo order for Angkor Cafe's T01 and, the first
+#    time only, walks it through accept -> start_preparing -> mark_ready -> mark_served
+#    -> complete, printing confirmation at each step plus proof that completing an
+#    already-completed order is rejected
+
+bench --site emenu.localhost run-tests --app e_menu
+# -> Ran 77 tests ... OK
+#    (58 from Slices 1-5, plus: order submission snapshots real menu-item price/name
+#    and ignores a client-supplied price, rejects unavailable items, cross-restaurant
+#    menu items, invalid QR pairs, empty carts, qty < 1, and unknown payment methods;
+#    and the full lifecycle -- correct role required per action, invalid transitions
+#    rejected, direct field edits always rejected, tenant isolation, platform-admin
+#    bypass)
+```
+
+Also verified live over real HTTP: an unauthenticated `POST .../submit_order` with a
+valid QR pair creates a `PENDING` order with server-computed totals; the same call with
+a manipulated `price` field in the cart is silently ignored in favor of the real menu
+price; a cashier's `POST /api/resource/Order/<name>?run_method=accept` succeeds (200)
+and transitions the order, while the same call from a user with no restaurant
+membership returns 403. Playwright-verified at a 390x844 mobile viewport: adding two
+items, opening the cart, tapping "Submit Order", seeing the confirmation screen with
+the real order number, and confirming the "Back to menu" button is clickable (i.e. the
+confirmation overlay isn't blocking input) and the cart is empty afterward. Desk-side
+`order.js` action buttons were also screenshotted per status and confirmed to correctly
+transition an order end-to-end.
+
+## What's next: Slice 7
+
+Slice 7 implements manual payment confirmation: a `Payment` DocType
+(`provider`/`provider_reference`/`method`/`amount`/`status`, provider-neutral per
+`architecture.md` → Payments) recording that a `COMPLETED` order was paid, plus staff
+action(s) to confirm payment. `Order.payment_status` (already present, currently always
+`Unpaid`) starts getting set for real. No payment gateway integration yet -- that's
+Slice 8, behind the same `Payment` boundary.

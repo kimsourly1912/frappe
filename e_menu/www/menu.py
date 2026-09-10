@@ -32,6 +32,7 @@ def get_context(context):
 	context.table = resolved["table"]
 	context.restaurant_name = resolved["restaurant_name"]
 	context.table_name = resolved["table_name"]
+	context.public_id = public_id
 	context.table_token = table_token
 	context.categories = get_available_menu(resolved["restaurant"])
 	return context

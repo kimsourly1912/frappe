@@ -9,10 +9,12 @@ E-menu is built as a custom [Frappe](https://frappeframework.com) app (`e_menu`)
 of Frappe Framework v15. It reuses Frappe's authentication, users, roles, permissions,
 DocTypes, REST API, background jobs, and Desk admin UI instead of rebuilding them.
 
-**Status:** Slice 5 (customer menu) complete. The full owner/staff-facing data model
-(`Subscription Plan` through `Restaurant Table`, with QR generation) is implemented,
-and customers can now scan a table's QR and browse a live, mobile-first menu with a
-working cart — no login, no Desk — at `/menu/<public_id>/<table_token>`. See
+**Status:** Slice 6 (ordering) complete. Customers can scan a table's QR, browse a
+live mobile-first menu (`/menu/<public_id>/<table_token>`), and submit a real order
+with server-computed, currency-safe totals — no login, no Desk. Restaurant staff see
+incoming orders and move them through an explicit lifecycle
+(`PENDING → ACCEPTED → PREPARING → READY → SERVED → COMPLETED`, plus `REJECTED`/
+`CANCELLED`) via role-gated action buttons on the standard Desk form. See
 [docs/development.md](docs/development.md) for the delivery plan and what's next.
 
 ## Repository scope
@@ -45,7 +47,9 @@ how to stand up a bench locally that installs this app.
 │       │   ├── restaurant_member/   # + invite_staff() whitelisted API
 │       │   ├── menu_category/
 │       │   ├── menu_item/
-│       │   └── restaurant_table/    # + resolve_qr() whitelisted, allow_guest API
+│       │   ├── restaurant_table/    # + resolve_qr() whitelisted, allow_guest API
+│       │   ├── order/               # + submit_order() (Guest) + accept/reject/... actions
+│       │   └── order_item/          # child table of Order
 │       ├── testing.py         # shared test fixtures (owner/staff/restaurant helpers)
 │       └── demo.py
 ├── docs/

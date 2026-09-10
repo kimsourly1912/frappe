@@ -1,15 +1,15 @@
 # Permissions: platform vs. restaurant-level
 
-> **Status:** Slice 5 — all three staff/admin layers below are implemented: `System
-> Manager` (platform), `Restaurant Owner` (SaaS account-level), and `Restaurant Member`
-> with its per-restaurant `OWNER`/`MANAGER`/`CASHIER`/`KITCHEN` roles plus the
-> `Restaurant Staff` Frappe Role. `Menu Category`/`Menu Item`/`Restaurant Table` reuse
-> the exact same restaurant-level mechanism — see "Extending this to new
-> restaurant-scoped DocTypes" below. The fourth layer, **customer-facing `Guest`
-> access**, is now implemented too — see that section below. Three Frappe Roles exist
-> (`System Manager`, `Restaurant Owner`, `Restaurant Staff`) alongside the *separate*
-> concept of a `Restaurant Member.role` value — see the "Don't confuse these" callouts
-> below if you're new to this file.
+> **Status:** Slice 6 — every layer below is implemented: `System Manager` (platform),
+> `Restaurant Owner` (SaaS account-level), `Restaurant Member` with its per-restaurant
+> `OWNER`/`MANAGER`/`CASHIER`/`KITCHEN` roles plus the `Restaurant Staff` Frappe Role,
+> and customer-facing `Guest` access (QR resolution, menu browsing, now order
+> submission). `Order` (Slice 6) needed a genuinely different `has_permission` shape
+> from every other restaurant-scoped DocType — see "Order: action-based writes, not
+> field-based" below, a new, important addition if you've read this file before. Three
+> Frappe Roles exist (`System Manager`, `Restaurant Owner`, `Restaurant Staff`)
+> alongside the *separate* concept of a `Restaurant Member.role` value — see the "Don't
+> confuse these" callouts below if you're new to this file.
 
 ## Two separate authorization mechanisms
 
@@ -165,12 +165,50 @@ not a `fetch_from` field like `Restaurant.owner_user`, which isn't populated yet
 point Frappe checks create-permission (see `Restaurant`'s entry above for why that one
 needed a `ptype == "create"` special case instead). `Restaurant Table` (Slice 4) reused
 both helpers with zero new permission code — confirming the pattern holds for a fifth
-DocType. When adding the next one (`Order` in Slice 6, ...): reuse these two helpers
-directly, don't reintroduce the SQL/role-check inline — and if a
-DocType needs different read/write boundaries than "any staff / OWNER+MANAGER" (e.g.
-`Order` will likely need `KITCHEN` to *write* certain order-status transitions), write
-that DocType's own `has_permission` function rather than forcing it through the shared
-helper unchanged.
+DocType. `Order` (Slice 6) is the first one that genuinely doesn't fit — see the next
+section — because its write model isn't "edit fields you're allowed to edit" at all.
+
+### Order: action-based writes, not field-based — *Slice 6*
+
+`Order` does **not** use `_restaurant_scoped_has_permission`. Its `get_permission_query_conditions_for_order`
+still reuses `_restaurant_scoped_query_conditions` (list-view scoping is unchanged: any
+active staff member sees their restaurant's orders), but `has_permission_order` is
+hand-written, for a reason worth understanding if you touch this file again:
+
+**An Order is never edited by directly setting fields — ever, for anyone, admins
+included.** `Order.validate()` (`reject_direct_edit`) unconditionally throws on any
+`.save()` of an existing order. The only legitimate mutations are creation
+(`submit_order`, Guest, `ignore_permissions=True`) and the seven named action methods
+(`accept`, `reject`, `start_preparing`, `mark_ready`, `mark_served`, `complete`,
+`cancel`), which write via `self.db_set(...)` — bypassing `validate()` entirely, so
+`reject_direct_edit` never blocks them.
+
+Given that, you'd expect `has_permission_order` to grant **no** restaurant role
+"write" at all (mirroring the read-only stance the very first version of this section
+took). It can't, for a Frappe-framework reason, not a design choice: **calling *any*
+whitelisted instance method through Frappe's own `run_method` convention — both the
+REST endpoint (`POST /api/resource/<doctype>/<name>?run_method=...`,
+`frappe/api/v1.py:execute_doc_method`) and Desk's `frm.call()`, which is what
+`order.js`'s action buttons use — requires `has_permission("write")` before the method
+even runs.** This was discovered by testing, not anticipated: the first version of
+`has_permission_order` returned `False` for every `ptype` except `"read"`, which
+correctly blocked field edits but also silently blocked staff from calling `accept()`/
+`mark_ready()`/etc. at all, with a generic `frappe.PermissionError: Not permitted`
+that has nothing to do with `ACTION_ROLES`.
+
+The fix: `has_permission_order` grants `"write"` broadly to any active staff member
+(same as `"read"`) — this only clears the *framework's* gate to attempt calling a
+method at all. Two things do the actual, meaningful authorization:
+- **Per-action role checks** (`Order._transition`, checked against `ACTION_ROLES`) —
+  *which* action a *which* role may call (`KITCHEN` can't `accept`, `CASHIER` can't
+  `start_preparing`, etc.).
+- **`reject_direct_edit`** — the thing that stops the broad `"write"` grant from
+  becoming a generic PATCH endpoint for order contents, since it blocks every write
+  path except the db_set-based action methods, unconditionally.
+
+Neither of those is expressible as a `has_permission` boolean — this is exactly the
+"if a DocType needs different read/write boundaries... write that DocType's own
+`has_permission` function" case this section already anticipated before Slice 6 landed.
 
 ### Cross-restaurant reference integrity — *implemented, Slice 3*
 
@@ -182,7 +220,7 @@ invariants of the data model, not permissions per se — the check runs even for
 platform admin, unlike every authorization check above. See `domain-model.md` for the
 specific integrity rules per DocType.
 
-## Customer-facing (unauthenticated) access — *implemented, Slices 4-5*
+## Customer-facing (unauthenticated) access — *implemented, Slices 4-6*
 
 Customers never log in — requests from the QR/menu/ordering flow run as Frappe's
 built-in `Guest` role. Their "authorization" isn't role-based at all: it's **scoped by
@@ -216,9 +254,13 @@ request — everything it renders is scoped to the one `restaurant` the QR resol
 Still nothing else on `Restaurant`/`Menu Item`/etc. is reachable by `Guest` through the
 normal DocType API — only this one purpose-built, read-only path.
 
-Slice 6 will add order submission, similarly scoped to `Guest` and to *that* resolved
-`(restaurant, table)` pair, never a client-supplied one — see `architecture.md` →
-Customer-facing UI for why the cart stays client-side-only until then.
+**`submit_order` (Slice 6)** follows the identical shape: `allow_guest=True`, resolves
+`(restaurant, table)` via `resolve_qr` and only that resolution (never a client-supplied
+`restaurant`/`table` id), and creates with `ignore_permissions=True` since `Guest` has
+no restaurant membership for the base permission grid to check in the first place. See
+`domain-model.md` for why prices/names are never trusted from the request either. The
+cart itself stays client-side (Slice 5's `localStorage`-backed JS) right up until this
+one submission call — see `architecture.md` → Customer-facing UI.
 
 ## Frappe v15/v16 custom permission "actions"
 

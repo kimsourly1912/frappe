@@ -1,12 +1,11 @@
 # Domain model
 
-> **Status:** Slice 5 — `Subscription Plan`, `Owner Subscription`, `Restaurant`,
-> `Restaurant Member`, `Menu Category`, `Menu Item`, and `Restaurant Table` are
-> implemented (fields/behavior below reflect actual code, not just the plan), and the
-> public customer menu page (no new DocTypes — see `architecture.md` → Customer-facing
-> UI) is built on top of them. Everything else is still the planned shape baselined from
-> the product spec, to be implemented incrementally (noted per-entity below) — treat
-> those field lists as a starting point, not a frozen schema.
+> **Status:** Slice 6 — `Subscription Plan` through `Restaurant Table` (Slices 1-4) plus
+> `Order`/`Order Item` (Slice 6) are implemented (fields/behavior below reflect actual
+> code, not just the plan). The public customer menu page (Slice 5, no new DocTypes —
+> see `architecture.md` → Customer-facing UI) now submits real orders. `Payment` is still
+> the planned shape baselined from the product spec — treat that field list as a
+> starting point, not a frozen schema.
 
 ## Entity-relationship overview
 
@@ -75,7 +74,6 @@ erDiagram
     ORDER_ {
         link restaurant
         link table
-        string order_number
         string status
         currency subtotal
         currency total
@@ -267,27 +265,90 @@ not distinguishing *why* it failed, so a client can't enumerate restaurants/tabl
 probing. This function only resolves identity; it deliberately does **not** render a
 menu or any customer-facing page — that's Slice 5's scope, built on top of this.
 
-### Order / Order Item — *Slice 6*
-**Order Item will be a child table of Order**, not an independent top-level DocType.
-Reasoning: order items have no independent lifecycle or identity outside their parent
-order (they're never queried, listed, or permission-checked on their own), they're
-always created/read/updated atomically with the order, and Frappe's child-table
-mechanism already gives atomic parent+children saves for free — matching the spec's
-"order creation should be atomic" requirement without extra transaction-management code.
-This is the standard Frappe pattern for "detail lines" (cf. Sales Order Item, Purchase
-Order Item in ERPNext) and avoids inventing bespoke transaction handling that Frappe
-already solves.
+### Order / Order Item — *Slice 6, implemented*
+**Order Item is a child table of Order** (`istable=1`), not an independent top-level
+DocType, exactly as planned: order items have no independent lifecycle (never queried,
+listed, or permission-checked on their own), and Frappe's child-table mechanism gives
+atomic parent+children saves for free — a single `order.insert()` either creates the
+whole order or none of it, matching "order creation should be atomic" without any
+hand-rolled transaction code. `Order Item` has no `permissions` of its own; access is
+entirely governed by the parent `Order`.
 
-Order Item snapshots `item_name_snapshot` and `unit_price_snapshot` at order time — the
-live `Menu Item` is only ever the *reference*, never the source of truth for a placed
-order's historical price/name. `line_total = unit_price_snapshot * quantity`, computed
-server-side.
+**Fields.** `Order`: `restaurant`, `table` (Link → `Restaurant Table`), `status`
+(read-only — see below), `items` (Table), `subtotal`, `total` (both read-only,
+`Currency`), `payment_method` (`MANUAL`/`ONLINE`, set once at submission),
+`payment_status` (`Unpaid`/`Paid`, read-only — the field exists now per the spec's
+suggested shape, but nothing sets it to `Paid` yet; that's `Payment`, Slice 7). No
+separate `order_number` field — the autoname (`ORD-.#####`) already *is* a stable,
+readable order number, so a redundant field would just be two names for the same thing.
+`Order Item`: `menu_item` (Link), `item_name_snapshot`, `unit_price_snapshot`
+(read-only, both set from the live `Menu Item` only once, at order creation),
+`quantity` (≥ 1), `line_total` (read-only), `customer_note`.
 
-Order lifecycle is an explicit state machine (`PENDING → ACCEPTED → PREPARING → READY →
-SERVED → COMPLETED`, plus terminal `REJECTED`/`CANCELLED`), implemented as named
-controller methods (`accept()`, `start_preparing()`, `mark_ready()`, `mark_served()`,
-`complete()`, `cancel()`) that each validate the current state before transitioning —
-never a generic "PATCH status to anything" endpoint.
+**Money is `Currency`/`flt()`, not `float` arithmetic treated carelessly, and never
+Python's `decimal.Decimal`.** The spec says "never use floating-point money
+calculations" — Frappe's `Currency` fields are backed by `decimal(21,9)` **database
+columns** (verified: `DESCRIBE` on an existing Currency column), not floating-point SQL
+types, and `frappe.utils.flt()` rounds consistently at the field's configured precision
+during application-level arithmetic. That combination is Frappe's own native,
+idiomatic answer to "currency-safe values" — used the same way throughout ERPNext's
+entire accounting stack — so introducing `decimal.Decimal` on top of it would be
+non-idiomatic and add serialization complexity for no real safety gain.
+
+**Totals are computed exactly once, entirely server-side, in one place:**
+`Order.snapshot_and_calculate_items()`, called from `validate()` only when
+`self.is_new()`. For every line: re-reads the `Menu Item` fresh from the database
+(never trusts a client-supplied `menu_item.price`/name/line total), rejects it if it
+doesn't belong to this order's own `restaurant` (the same cross-tenant integrity rule
+as `Menu Item.category`) or isn't currently `is_available`, and only then sets
+`item_name_snapshot`/`unit_price_snapshot`/`line_total`. `subtotal`/`total` are the sum
+of the (now server-computed) line totals. This is the one authoritative place — not
+`submit_order()` (below), which deliberately never reads the client's price at all, so
+there's nothing for that entry point to get wrong even if a future caller tried.
+
+**`submit_order(public_id, table_token, items, payment_method)`** (`order.py`,
+`@frappe.whitelist(allow_guest=True)`) is the customer-facing entry point: resolves
+`restaurant`/`table` via `resolve_qr` (Slice 4, never from the request body directly),
+builds the `Order` + child rows from `{menu_item, quantity, customer_note}` only, and
+inserts with `ignore_permissions=True` (Guest has no restaurant membership to check
+against — `resolve_qr`'s successful resolution already *is* the authorization, the same
+pattern as `Restaurant.after_insert`'s membership bootstrap and `invite_staff`).
+
+**Order lifecycle** is an explicit state machine —
+`PENDING → ACCEPTED → PREPARING → READY → SERVED → COMPLETED`, plus terminal
+`REJECTED` (from `PENDING` only) and `CANCELLED` (from `PENDING`/`ACCEPTED`/`PREPARING`
+— cancelling stops making sense once food is ready/served) — implemented as named,
+individually `@frappe.whitelist()`-ed instance methods (`accept()`, `reject()`,
+`start_preparing()`, `mark_ready()`, `mark_served()`, `complete()`, `cancel()`), never a
+generic "PATCH status to anything" endpoint. Each shares a private `_transition()`
+helper that checks the acting user's restaurant-level role against `ACTION_ROLES` for
+that specific action, then checks the order's current status is in that action's
+allowed source set, then writes with `self.db_set("status", ...)` — deliberately
+**not** `self.save()`, so the transition never re-runs `validate()` (and its item/total
+recalculation) and is unaffected by `Order.validate()`'s blanket rejection of direct
+edits (next paragraph). Role-to-action mapping matches `permissions.md`'s stated
+intent: `CASHIER` handles front-of-house (`accept`/`reject`/`mark_served`/`complete`/
+`cancel`), `KITCHEN` handles fulfillment (`start_preparing`/`mark_ready`) only,
+`OWNER`/`MANAGER` can do everything.
+
+**An existing Order can never be edited directly — not even by a platform admin.**
+`Order.validate()` unconditionally rejects any `.save()` on a non-new order
+(`reject_direct_edit`). This is stronger than "don't let staff hand-edit `status`": see
+`permissions.md` for why it has to be unconditional — `has_permission_order` grants
+"write" broadly to any active staff member (a Frappe framework requirement, not a
+choice: `frm.call()`/the `run_method` REST endpoint both require `has_permission
+("write")` just to *invoke* a whitelisted instance method), so this blanket
+`validate()` guard is the actual thing standing between that broad grant and a generic
+PATCH endpoint for order contents.
+
+**Staff operational screen**: plain Frappe Desk, not a custom page. `order.js` adds
+status-appropriate action buttons (`frm.add_custom_button` calling `frm.call(method)`)
+to the standard document form — no new UI framework, no dashboard/kanban view, matching
+the "don't add abstractions before the concrete need exists" principle. Desk's existing
+list view (already restaurant-scoped, from `permission_query_conditions`) is "see
+incoming orders"; the form + action buttons are "move it through valid states". If a
+faster multi-order-at-a-glance view becomes a real need later, that's a concrete
+trigger to revisit — not a preemptive one.
 
 ### Payment — *Slice 7 (manual) / Slice 8 (provider abstraction)*
 Restaurant- and order-scoped. `provider` distinguishes `MANUAL` from named online
