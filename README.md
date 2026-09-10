@@ -9,8 +9,10 @@ E-menu is built as a custom [Frappe](https://frappeframework.com) app (`e_menu`)
 of Frappe Framework v15. It reuses Frappe's authentication, users, roles, permissions,
 DocTypes, REST API, background jobs, and Desk admin UI instead of rebuilding them.
 
-**Status:** Slice 0 (foundation) complete. No business DocTypes yet — see
-[docs/development.md](docs/development.md) for the delivery plan.
+**Status:** Slice 1 (SaaS ownership) complete. `Subscription Plan`, `Owner Subscription`,
+and `Restaurant` are implemented, with server-side restaurant-limit enforcement and
+tenant-isolated access. See [docs/development.md](docs/development.md) for the delivery
+plan and what's next.
 
 ## Repository scope
 
@@ -24,11 +26,18 @@ how to stand up a bench locally that installs this app.
 ├── e_menu/                 # the Frappe app package
 │   ├── hooks.py             # app metadata & integration points
 │   ├── modules.txt          # Frappe modules owned by this app
+│   ├── permissions.py       # restaurant-level query conditions & has_permission hooks
 │   ├── config/               # desk sidebar config
 │   ├── patches/              # data migration patches
 │   ├── public/                # static assets (css/js)
 │   ├── templates/            # Jinja templates / web pages
-│   └── www/                   # public web routes (customer-facing pages, later slices)
+│   ├── www/                   # public web routes (customer-facing pages, later slices)
+│   └── e_menu/                # "E Menu" module: DocTypes + demo.py (seed data)
+│       ├── doctype/
+│       │   ├── subscription_plan/
+│       │   ├── owner_subscription/
+│       │   └── restaurant/
+│       └── demo.py
 ├── docs/
 │   ├── architecture.md      # layered architecture, tenancy model
 │   ├── domain-model.md      # planned DocTypes & ER diagram
@@ -55,8 +64,8 @@ bench start
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) — layered architecture, multi-tenancy model
-- [docs/domain-model.md](docs/domain-model.md) — planned DocTypes and their relationships
-- [docs/permissions.md](docs/permissions.md) — platform permissions vs restaurant membership
+- [docs/domain-model.md](docs/domain-model.md) — DocTypes (implemented + planned) and their relationships
+- [docs/permissions.md](docs/permissions.md) — platform vs. account vs. restaurant-level authorization
 - [docs/development.md](docs/development.md) — environment setup, daily commands, decisions log
 
 ## License

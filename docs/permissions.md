@@ -1,8 +1,10 @@
 # Permissions: platform vs. restaurant-level
 
-> **Status:** Slice 0 — no roles or DocTypes exist yet. This documents the model that
-> Slices 1–2 implement. Kept close to `architecture.md`'s summary but detailed enough
-> to implement against directly.
+> **Status:** Slice 1 — `System Manager` (platform) and `Restaurant Owner` (SaaS
+> account-level) are implemented, enforcing access to `Subscription Plan`, `Owner
+> Subscription`, and `Restaurant`. `Restaurant Member` and its per-restaurant
+> OWNER/MANAGER/CASHIER/KITCHEN roles are still Slice 2 — this documents the model
+> Slice 2 implements, unchanged from the original plan.
 
 ## Two separate authorization mechanisms
 
@@ -30,6 +32,41 @@ own DocType rather than trying to force restaurant roles into Frappe's role syst
   to restaurant data — their access is entirely determined by restaurant membership
   (below). They may still be a Frappe `User` with the base `All`/`Desk User` roles
   needed to log in and use the Desk UI for the screens they're allowed to see.
+
+## SaaS account-level authorization (`Restaurant Owner` role) — *Slice 1*
+
+Between "platform admin" and "restaurant staff" sits a third, narrower concept:
+**is this user a paying SaaS customer who may hold an `Owner Subscription` and create
+`Restaurant` records at all?** That's what the Frappe Role `Restaurant Owner`
+(`desk_access = 1`) answers. It is intentionally a *platform*-scoped role (assigned once
+per SaaS account, not per restaurant) — don't confuse it with the *restaurant-scoped*
+`OWNER` value of `Restaurant Member.role` introduced in Slice 2, described below. They
+usually apply to the same person (the person who owns the subscription is normally also
+the operational `OWNER` of every restaurant they create), but they're enforced by two
+completely different mechanisms:
+
+| | `Restaurant Owner` (Frappe Role) | `Restaurant Member.role = OWNER` (Slice 2) |
+|---|---|---|
+| Scope | Whole SaaS account (one `Owner Subscription`) | One specific restaurant |
+| Grants | Desk access; base create/read/write on `Restaurant`, read on `Owner Subscription` | Full operational control at that one restaurant (menu, staff, orders...) |
+| A user could have it and still... | ...own zero restaurants yet, or have hit their plan limit | ...simultaneously be `CASHIER` at a *different* restaurant they don't own |
+
+Standard Frappe DocType permissions grant `Restaurant Owner` base `create`/`read`/`write`
+on `Restaurant` and `read` on `Owner Subscription` — deliberately **no** `create`/`write`
+on `Owner Subscription` (assignment stays admin-managed for v1) and **no** `delete` on
+`Restaurant` (deactivate via `status`, don't destroy history). Those base grants are then
+narrowed to "only rows this user actually owns" by two more hooks, both in
+`e_menu/permissions.py`:
+
+- **`permission_query_conditions`** — scopes list/report views (`owner_user = <user>`).
+- **`has_permission`** — scopes direct single-document read/write. For `create` on
+  `Restaurant` specifically, this hook always returns `True` for a non-admin: the
+  document's `owner_user` is a `fetch_from` field that isn't populated yet at the point
+  Frappe checks create-permission (fetch happens during `validate()`, which runs after),
+  so the *real* ownership check for creation lives in `Restaurant.validate()`
+  (`validate_actor_owns_subscription`) instead — see `domain-model.md`. This is a
+  concrete instance of the general rule stated in `architecture.md`: **UI-only/query-only
+  filtering is not a security boundary; the write-path check in the controller is.**
 
 ## Restaurant-level authorization
 

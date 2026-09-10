@@ -166,8 +166,17 @@ bench --site emenu.localhost migrate         # apply DocType/schema changes afte
 bench build --app e_menu                     # rebuild this app's JS/CSS assets
 bench --site emenu.localhost list-apps       # confirm installed apps + versions
 
-# Run this app's tests (once tests exist, from Slice 1 onward)
+# Enable tests once per site (Frappe ships this off by default)
+bench --site emenu.localhost set-config allow_tests true
+
+# Run this app's tests
 bench --site emenu.localhost run-tests --app e_menu
+
+# Seed demo data (idempotent): 3 subscription plans, a demo owner
+# (owner@example.com / e_menu_demo) on the Free plan, and one restaurant
+# ("Angkor Cafe") -- also prints a live proof that a second restaurant is
+# rejected server-side.
+bench --site emenu.localhost execute e_menu.e_menu.demo.create_demo_data
 
 # Create a new DocType/report/page (interactive wizard)
 bench --site emenu.localhost console
@@ -194,10 +203,49 @@ curl -H "Host: emenu.localhost" http://127.0.0.1:8000/login
 
 All three were confirmed during Slice 0 bootstrap.
 
-## What's next: Slice 1
+## Verifying it runs (Slice 1 acceptance)
 
-Slice 1 implements SaaS ownership: `Subscription Plan`, `Owner Subscription`,
-`Restaurant`, owner registration, and **server-side** restaurant-limit enforcement (an
-owner on a 1-restaurant plan must be rejected, at the DocType/API layer, when creating a
-second restaurant — never just hidden in the UI). See
-[domain-model.md](domain-model.md) for the planned shape of these DocTypes.
+```bash
+bench --site emenu.localhost execute e_menu.e_menu.demo.create_demo_data
+# -> creates Free/Starter/Business plans, owner@example.com on Free (limit=1),
+#    one restaurant, and prints confirmation that a second one is rejected
+
+bench --site emenu.localhost run-tests --app e_menu
+# -> Ran 12 tests ... OK
+#    (restaurant-limit enforcement, tenant isolation, cross-owner rejection,
+#    inactive-subscription rejection, platform-admin bypass, snapshot/override
+#    behavior, duplicate-active-subscription rejection, System User requirement)
+```
+
+Also verified live over real HTTP (not just `bench console`/unit tests) during Slice 1:
+sign in as `owner@example.com`, `GET /api/resource/Restaurant` returns only that owner's
+restaurant, a second `POST /api/resource/Restaurant` under the same subscription returns
+HTTP 417 with a clear `ValidationError`, and `GET /api/resource/Subscription Plan` is
+403 for the owner but 200 for `Administrator`.
+
+## Owner registration: what's automatic vs. manual in Slice 1
+
+Per the spec, "use Frappe's native User/authentication system" — there is no custom
+auth code anywhere in this app. What's automatic today, and what's still a manual
+platform-admin step:
+
+- **Sign in, "manage profile":** fully native — any Frappe `User` can log in and edit
+  their own profile via Desk's "My Settings". No app code involved.
+- **Account creation:** in v1, a platform admin creates the owner's `User` (Desk → New
+  User) and assigns the `Restaurant Owner` role. Frappe's built-in self-service `/signup`
+  page could do the account-creation half automatically (flip `Website Settings →
+  disable_signup` off), but a self-registered user lands as a `Website User` with no
+  Desk access — a platform admin would still need to grant the `Restaurant Owner` role
+  before that account could do anything restaurant-related. Deliberately deferred rather
+  than half-building an onboarding flow; revisit when onboarding UX is actually in scope.
+- **Owner Subscription assignment:** manual by design for v1 (see `domain-model.md`) —
+  a platform admin links a `User` to a `Subscription Plan`.
+
+## What's next: Slice 2
+
+Slice 2 implements restaurant staff: `Restaurant Member` (the join between `User` and
+`Restaurant` carrying the restaurant-level `OWNER`/`MANAGER`/`CASHIER`/`KITCHEN` role,
+distinct from the platform-level `Restaurant Owner` Frappe Role added in Slice 1 — see
+`permissions.md`), owner-driven staff invitation, and restaurant membership permission
+checks. Acceptance: Restaurant A staff cannot access Restaurant B resources. See
+[domain-model.md](domain-model.md) for the planned shape.

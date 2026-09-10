@@ -123,13 +123,15 @@ app_license = "Proprietary"
 # -----------
 # Permissions evaluated in scripted ways
 
-# permission_query_conditions = {
-# 	"Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
-# }
-#
-# has_permission = {
-# 	"Event": "frappe.desk.doctype.event.event.has_permission",
-# }
+permission_query_conditions = {
+	"Owner Subscription": "e_menu.permissions.get_permission_query_conditions_for_owner_subscription",
+	"Restaurant": "e_menu.permissions.get_permission_query_conditions_for_restaurant",
+}
+
+has_permission = {
+	"Owner Subscription": "e_menu.permissions.has_permission_owner_subscription",
+	"Restaurant": "e_menu.permissions.has_permission_restaurant",
+}
 
 # DocType Class
 # ---------------

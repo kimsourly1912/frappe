@@ -1,9 +1,10 @@
 # Domain model
 
-> **Status:** Slice 0 — none of these DocTypes exist yet. This is the planned shape,
-> baselined from the product spec, to be implemented incrementally (noted per-entity
-> below). Treat field lists as a starting point, not a frozen schema — each slice's
-> implementation is the source of truth once it lands.
+> **Status:** Slice 1 — `Subscription Plan`, `Owner Subscription`, and `Restaurant` are
+> implemented (fields/behavior below reflect actual code, not just the plan). Everything
+> else is still the planned shape baselined from the product spec, to be implemented
+> incrementally (noted per-entity below) — treat those field lists as a starting point,
+> not a frozen schema.
 
 ## Entity-relationship overview
 
@@ -30,16 +31,17 @@ erDiagram
         currency price
     }
     OWNER_SUBSCRIPTION {
-        link owner "User"
+        link owner_user "User"
         link plan "Subscription Plan"
         int restaurant_limit "snapshot from plan at assignment time"
-        string status
+        string status "Active/Suspended/Cancelled"
     }
     RESTAURANT {
         string restaurant_name
         string public_id "stable, non-sequential public identifier"
         link owner_subscription
-        string status
+        link owner_user "fetch_from owner_subscription.owner_user"
+        string status "Active/Inactive"
     }
     RESTAURANT_MEMBER {
         link restaurant
@@ -104,31 +106,56 @@ diagram uses `snake_case`/`ORDER_` only because Mermaid reserves the word `ORDER
 
 ## Planned DocTypes and design notes
 
-### Subscription Plan — *Slice 1*
-Platform-defined (created/edited by System Manager only). `restaurant_limit` is the
-single enforced constraint for v1; billing integration is deliberately out of scope
-until a real provider is chosen (see architecture.md → Payments for the analogous
-provider-neutral pattern this will likely follow).
+### Subscription Plan — *Slice 1, implemented*
+Platform-defined (`System Manager` only — no permission row exists for any other role,
+so this is a hard DocType-level restriction, not just a UI hint). Fields: `plan_name`
+(autoname, unique), `restaurant_limit` (Int, non-negative), `is_active` (Check),
+`description`. `restaurant_limit` is the single enforced constraint for v1; billing
+integration is deliberately out of scope until a real provider is chosen (see
+architecture.md → Payments for the analogous provider-neutral pattern this will likely
+follow).
 
-### Owner Subscription — *Slice 1*
-Links one `User` (the shop owner) to one `Subscription Plan`. Manually assigned by a
-platform admin for v1 (no self-serve billing yet). `restaurant_limit` is **snapshotted**
-onto the Owner Subscription at assignment time rather than always read live from the
-Plan — so changing a Plan's limit later doesn't retroactively change limits for owners
-already on a (possibly grandfathered) subscription, unless a platform admin explicitly
-re-assigns. This is a deliberate business-rule decision, not an oversight; revisit if
-plan changes should always be "live."
+### Owner Subscription — *Slice 1, implemented*
+Links one `User` (`owner_user` — named that, not `owner`, because `owner` is Frappe's
+own built-in "created-by" audit field on every document) to one `Subscription Plan`.
+Manually assigned by a platform admin for v1 (no self-serve billing yet — see
+`permissions.md` for what "manually assigned" means for who can create one).
+`restaurant_limit` is **snapshotted** onto the Owner Subscription when it's created or
+when its `plan` link changes, rather than always read live from the Plan — so changing a
+Plan's limit later doesn't retroactively change limits for owners already on a (possibly
+grandfathered) subscription, and a platform admin can freely override the number for one
+owner without it snapping back. `status` (`Active`/`Suspended`/`Cancelled`) — only one
+`Active` subscription per `owner_user` is allowed at a time (enforced in `validate()`);
+older subscriptions are kept as history rather than deleted. The owner must be a Frappe
+`User` with `user_type = System User` (Desk access) — enforced in `validate()`, because
+Frappe derives `user_type` from whether the user holds any `desk_access` role, so a user
+with no relevant role would silently become a Website User regardless of what's set
+directly on the field.
 
-**Enforcement:** `Restaurant.validate()` (or a whitelisted `create_restaurant` API,
-whichever proves simpler in Slice 1) counts the owner's current active restaurants
-against `Owner Subscription.restaurant_limit` and raises `frappe.ValidationError`
-server-side before insert — never relies on the UI disabling a button.
+**Enforcement:** `Restaurant.validate()` locks the Owner Subscription row (`SELECT ...
+FOR UPDATE`), counts the owner's current restaurants (all statuses — see below) against
+`Owner Subscription.restaurant_limit`, and raises `frappe.ValidationError` server-side
+before insert — verified via both `bench run-tests` and a live HTTP `POST
+/api/resource/Restaurant` call, not just the Desk UI disabling a button.
 
-### Restaurant — *Slice 1*
-The tenant boundary. Carries a `public_id` distinct from its Frappe `name` (autoname) —
-a non-sequential, non-guessable identifier safe to expose in customer-facing QR URLs
-(`/menu/<public_id>/<table_token>`), so internal document IDs are never exposed to the
-public internet. Belongs to exactly one `Owner Subscription`.
+### Restaurant — *Slice 1, implemented*
+The tenant boundary. Fields: `restaurant_name`, `owner_subscription` (Link, required),
+`owner_user` (Link, read-only, `fetch_from: owner_subscription.owner_user` — denormalized
+so the permission query condition doesn't need a JOIN), `public_id` (Data, read-only,
+unique, a 16-char random hash generated once in `validate()`), `status`
+(`Active`/`Inactive`). `public_id` is distinct from the Frappe `name` (autoname
+`REST-.#####`) — a non-sequential, non-guessable identifier safe to expose in
+customer-facing QR URLs later (`/menu/<public_id>/<table_token>`, Slice 4+), so internal
+sequential document IDs are never exposed to the public internet.
+
+Two independent server-side checks run in `Restaurant.validate()`, both proven with
+automated tests (`bench --site <site> run-tests --app e_menu`):
+- **Ownership:** the acting user must be `owner_subscription.owner_user`, unless they're
+  a platform admin (`System Manager`) — a client can't just supply someone else's
+  `owner_subscription` and have it accepted.
+- **Limit:** existing restaurants under that subscription (counted regardless of
+  `status` — deactivating one is not a loophole to free up a slot, matching "prefer
+  deactivation over deletion") must be below `restaurant_limit`.
 
 ### Restaurant Member — *Slice 2*
 The join between `User` and `Restaurant`, carrying the **restaurant-level** role
