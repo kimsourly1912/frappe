@@ -4,3 +4,4 @@
 
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
+e_menu.patches.v0_0.backfill_restaurant_owner_membership

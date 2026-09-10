@@ -5,6 +5,16 @@ app_description = "B2B SaaS platform for restaurant menu management, QR table or
 app_email = "kimsur61@gmail.com"
 app_license = "Proprietary"
 
+# Fixtures
+# ------------------
+# Ship the platform/account-level Roles this app depends on so a fresh install
+# (any site, not just this dev one) has them -- see docs/permissions.md for what
+# each one grants.
+
+fixtures = [
+	{"dt": "Role", "filters": [["name", "in", ["Restaurant Owner", "Restaurant Staff"]]]},
+]
+
 # Apps
 # ------------------
 
@@ -126,11 +136,13 @@ app_license = "Proprietary"
 permission_query_conditions = {
 	"Owner Subscription": "e_menu.permissions.get_permission_query_conditions_for_owner_subscription",
 	"Restaurant": "e_menu.permissions.get_permission_query_conditions_for_restaurant",
+	"Restaurant Member": "e_menu.permissions.get_permission_query_conditions_for_restaurant_member",
 }
 
 has_permission = {
 	"Owner Subscription": "e_menu.permissions.has_permission_owner_subscription",
 	"Restaurant": "e_menu.permissions.has_permission_restaurant",
+	"Restaurant Member": "e_menu.permissions.has_permission_restaurant_member",
 }
 
 # DocType Class

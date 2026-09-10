@@ -9,10 +9,11 @@ E-menu is built as a custom [Frappe](https://frappeframework.com) app (`e_menu`)
 of Frappe Framework v15. It reuses Frappe's authentication, users, roles, permissions,
 DocTypes, REST API, background jobs, and Desk admin UI instead of rebuilding them.
 
-**Status:** Slice 1 (SaaS ownership) complete. `Subscription Plan`, `Owner Subscription`,
-and `Restaurant` are implemented, with server-side restaurant-limit enforcement and
-tenant-isolated access. See [docs/development.md](docs/development.md) for the delivery
-plan and what's next.
+**Status:** Slice 2 (restaurant staff) complete. `Subscription Plan`, `Owner
+Subscription`, `Restaurant`, and `Restaurant Member` (staff roles: OWNER/MANAGER/
+CASHIER/KITCHEN) are implemented, with server-side restaurant-limit enforcement and
+tenant-isolated access down to individual staff members. See
+[docs/development.md](docs/development.md) for the delivery plan and what's next.
 
 ## Repository scope
 
@@ -32,16 +33,18 @@ how to stand up a bench locally that installs this app.
 │   ├── public/                # static assets (css/js)
 │   ├── templates/            # Jinja templates / web pages
 │   ├── www/                   # public web routes (customer-facing pages, later slices)
+│   ├── patches/v0_0/          # e.g. backfill_restaurant_owner_membership
 │   └── e_menu/                # "E Menu" module: DocTypes + demo.py (seed data)
 │       ├── doctype/
 │       │   ├── subscription_plan/
 │       │   ├── owner_subscription/
-│       │   └── restaurant/
+│       │   ├── restaurant/
+│       │   └── restaurant_member/   # + invite_staff() whitelisted API
 │       └── demo.py
 ├── docs/
 │   ├── architecture.md      # layered architecture, tenancy model
-│   ├── domain-model.md      # planned DocTypes & ER diagram
-│   ├── permissions.md       # platform vs restaurant-level authorization
+│   ├── domain-model.md      # implemented + planned DocTypes & ER diagram
+│   ├── permissions.md       # platform vs. account vs. restaurant-level authorization
 │   └── development.md       # environment setup & daily dev commands
 ├── pyproject.toml
 ├── license.txt

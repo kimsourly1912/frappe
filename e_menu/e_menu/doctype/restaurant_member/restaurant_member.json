@@ -1,51 +1,44 @@
 {
  "actions": [],
  "allow_rename": 1,
- "autoname": "REST-.#####",
- "creation": "2026-09-10 09:13:48.205871",
+ "autoname": "RM-.#####",
+ "creation": "2026-09-10 09:27:43.789083",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "restaurant_name",
-  "owner_subscription",
-  "owner_user",
-  "public_id",
+  "restaurant",
+  "user",
+  "role",
   "status"
  ],
  "fields": [
   {
-   "fieldname": "restaurant_name",
-   "fieldtype": "Data",
-   "in_list_view": 1,
-   "label": "Restaurant Name",
-   "reqd": 1
-  },
-  {
-   "fieldname": "owner_subscription",
-   "fieldtype": "Link",
-   "in_list_view": 1,
-   "label": "Owner Subscription",
-   "options": "Owner Subscription",
-   "reqd": 1
-  },
-  {
-   "fetch_from": "owner_subscription.owner_user",
-   "fieldname": "owner_user",
+   "fieldname": "restaurant",
    "fieldtype": "Link",
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "label": "Owner",
-   "options": "User",
-   "read_only": 1
+   "label": "Restaurant",
+   "options": "Restaurant",
+   "reqd": 1
   },
   {
-   "description": "Stable, non-sequential identifier safe to expose in customer-facing QR/menu URLs. Generated automatically.",
-   "fieldname": "public_id",
-   "fieldtype": "Data",
-   "label": "Public ID",
-   "read_only": 1,
-   "unique": 1
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "role",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Role",
+   "options": "OWNER\nMANAGER\nCASHIER\nKITCHEN",
+   "reqd": 1
   },
   {
    "default": "Active",
@@ -53,17 +46,18 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "options": "Active\nInactive",
+   "label": "Status",
+   "options": "Active\nDisabled",
    "reqd": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-09-10 09:32:11.553931",
+ "modified": "2026-09-10 09:27:43.789083",
  "modified_by": "Administrator",
  "module": "E Menu",
- "name": "Restaurant",
+ "name": "Restaurant Member",
  "owner": "Administrator",
  "permissions": [
   {
@@ -80,12 +74,6 @@
   },
   {
    "create": 1,
-   "read": 1,
-   "report": 1,
-   "role": "Restaurant Owner",
-   "write": 1
-  },
-  {
    "read": 1,
    "report": 1,
    "role": "Restaurant Staff",

@@ -223,6 +223,31 @@ restaurant, a second `POST /api/resource/Restaurant` under the same subscription
 HTTP 417 with a clear `ValidationError`, and `GET /api/resource/Subscription Plan` is
 403 for the owner but 200 for `Administrator`.
 
+## Verifying it runs (Slice 2 acceptance)
+
+```bash
+bench --site emenu.localhost execute e_menu.e_menu.demo.create_demo_data
+# -> (re-running is safe/idempotent) also invites a Manager, Cashier, and Kitchen
+#    staff member to Angkor Cafe, creates a second unrelated restaurant ("Spice
+#    Garden"), and prints confirmation that Angkor Cafe's cashier cannot list or
+#    directly read Spice Garden
+
+bench --site emenu.localhost run-tests --app e_menu
+# -> Ran 24 tests ... OK
+#    (12 from Slice 1, plus: auto-created OWNER membership on restaurant creation,
+#    automatic Restaurant Staff role grant, owner/manager can invite staff,
+#    cashier/kitchen/non-members cannot, duplicate membership rejected, last-active-
+#    OWNER protection, manager can write a Restaurant but cashier cannot, and the
+#    core acceptance test: Restaurant A staff cannot list, read, or invite staff
+#    into Restaurant B)
+```
+
+Also verified live over real HTTP during Slice 2: signed in as `cashier@example.com`
+(staff only at Angkor Cafe), `GET /api/resource/Restaurant` returns only Angkor Cafe,
+directly `GET`-ing Spice Garden returns HTTP 403, and calling the `invite_staff`
+whitelisted method against either restaurant returns HTTP 403 for the cashier but HTTP
+200 for `manager@example.com` against Angkor Cafe (the restaurant they actually work at).
+
 ## Owner registration: what's automatic vs. manual in Slice 1
 
 Per the spec, "use Frappe's native User/authentication system" — there is no custom
@@ -241,11 +266,24 @@ platform-admin step:
 - **Owner Subscription assignment:** manual by design for v1 (see `domain-model.md`) —
   a platform admin links a `User` to a `Subscription Plan`.
 
-## What's next: Slice 2
+## Restaurant staff: what's built in Slice 2
 
-Slice 2 implements restaurant staff: `Restaurant Member` (the join between `User` and
-`Restaurant` carrying the restaurant-level `OWNER`/`MANAGER`/`CASHIER`/`KITCHEN` role,
-distinct from the platform-level `Restaurant Owner` Frappe Role added in Slice 1 — see
-`permissions.md`), owner-driven staff invitation, and restaurant membership permission
-checks. Acceptance: Restaurant A staff cannot access Restaurant B resources. See
+`Restaurant Member` (the join between `User` and `Restaurant` carrying the
+restaurant-level `OWNER`/`MANAGER`/`CASHIER`/`KITCHEN` role — distinct from the
+platform-level `Restaurant Owner` Frappe Role from Slice 1; see `permissions.md`) is
+implemented, along with:
+- `invite_staff(restaurant, email, role)` — the owner/manager-facing action to add
+  staff, creating their `User` if needed.
+- Automatic `OWNER` membership + `Restaurant Staff` Desk-access role whenever a
+  restaurant is created or someone is invited.
+- A restaurant always keeps at least one active `OWNER` (can't disable the last one).
+- `Restaurant` read/write access extended from "just the subscription owner" (Slice 1)
+  to "any active staff member can read; OWNER/MANAGER can also write".
+
+## What's next: Slice 3
+
+Slice 3 implements menu management: `Menu Category` and `Menu Item`, restaurant-scoped,
+with server-side rejection of cross-restaurant references (a `Menu Item` can never
+reference another restaurant's `Menu Category`). Acceptance: owner/authorized staff can
+manage the menu; cross-restaurant references are rejected. See
 [domain-model.md](domain-model.md) for the planned shape.

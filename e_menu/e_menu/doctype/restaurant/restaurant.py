@@ -14,6 +14,20 @@ class Restaurant(Document):
 			self.enforce_restaurant_limit()
 			self.set_public_id()
 
+	def after_insert(self):
+		"""A restaurant always starts with exactly one staff member: its
+		subscription owner, as OWNER. See RestaurantMember._is_owner_bootstrap()
+		for the matching authorization exception this relies on -- there is no
+		Restaurant Member row yet to authorize against otherwise."""
+		frappe.get_doc(
+			{
+				"doctype": "Restaurant Member",
+				"restaurant": self.name,
+				"user": self.owner_user,
+				"role": "OWNER",
+			}
+		).insert(ignore_permissions=True)
+
 	def validate_owner_subscription_is_active(self):
 		status = frappe.db.get_value("Owner Subscription", self.owner_subscription, "status")
 		if status != "Active":

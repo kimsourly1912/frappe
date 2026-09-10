@@ -1,24 +1,41 @@
 # Development seed/demo data. Idempotent -- safe to run against a fresh or an
-# already-seeded site. Not for production use (creates a known demo password).
+# already-seeded site. Not for production use (creates known demo passwords).
 #
 # Usage (from the bench directory):
-#   bench --site <site> execute e_menu.demo.create_demo_data
+#   bench --site <site> execute e_menu.e_menu.demo.create_demo_data
 
 import frappe
 
+from e_menu.e_menu.doctype.restaurant_member.restaurant_member import invite_staff
+
 DEMO_OWNER_EMAIL = "owner@example.com"
 DEMO_OWNER_PASSWORD = "e_menu_demo"
+DEMO_STAFF_PASSWORD = "e_menu_demo"
+
+DEMO_STAFF = [
+	("manager@example.com", "MANAGER", "Demo", "Manager"),
+	("cashier@example.com", "CASHIER", "Demo", "Cashier"),
+	("kitchen@example.com", "KITCHEN", "Demo", "Kitchen"),
+]
 
 
 def create_demo_data():
 	create_plans()
 	owner = create_demo_owner()
 	subscription = create_demo_subscription(owner)
-	create_demo_restaurant(subscription)
+	restaurant = create_demo_restaurant(subscription)
 	demonstrate_limit_enforcement(subscription)
+	create_demo_staff(restaurant)
+
+	second_owner, second_restaurant = create_second_demo_restaurant()
+	demonstrate_cross_restaurant_isolation(restaurant, second_restaurant)
+
 	frappe.db.commit()
 	print("\nDemo data ready.")
-	print(f"Sign in as: {DEMO_OWNER_EMAIL} / {DEMO_OWNER_PASSWORD}")
+	print(f"Owner:   {DEMO_OWNER_EMAIL} / {DEMO_OWNER_PASSWORD}  ({restaurant.restaurant_name})")
+	for email, role, *_rest in DEMO_STAFF:
+		print(f"{role.title():<8} {email} / {DEMO_STAFF_PASSWORD}  ({restaurant.restaurant_name})")
+	print(f"Owner:   {second_owner} / {DEMO_OWNER_PASSWORD}  ({second_restaurant.restaurant_name})")
 
 
 def create_plans():
@@ -121,3 +138,101 @@ def demonstrate_limit_enforcement(subscription):
 		print("WARNING: second restaurant was NOT rejected -- limit enforcement may be broken.")
 	finally:
 		frappe.set_user("Administrator")
+
+
+def create_demo_staff(restaurant):
+	"""Owner invites a Manager, Cashier, and Kitchen staff member -- exercises the
+	real invite_staff() API as the owner, then sets a known demo password on each
+	new User so they can be signed in as directly for the demo."""
+	frappe.set_user(restaurant.owner_user)
+	try:
+		for email, role, first_name, last_name in DEMO_STAFF:
+			if frappe.db.exists("Restaurant Member", {"restaurant": restaurant.name, "user": email}):
+				continue
+			invite_staff(restaurant.name, email, role, first_name=first_name)
+			print(f"Invited {email} to {restaurant.restaurant_name} as {role}")
+	finally:
+		frappe.set_user("Administrator")
+
+	for email, role, first_name, last_name in DEMO_STAFF:
+		user = frappe.get_doc("User", email)
+		user.last_name = user.last_name or last_name
+		user.new_password = DEMO_STAFF_PASSWORD
+		user.save(ignore_permissions=True)
+
+
+def create_second_demo_restaurant():
+	"""A second, unrelated owner+restaurant -- exists purely to demonstrate that
+	Angkor Cafe's staff cannot reach it (the Slice 2 acceptance criterion)."""
+	email = "owner2@example.com"
+	if frappe.db.exists("User", email):
+		owner = frappe.get_doc("User", email)
+	else:
+		owner = frappe.get_doc(
+			{
+				"doctype": "User",
+				"email": email,
+				"first_name": "Second",
+				"last_name": "Owner",
+				"send_welcome_email": 0,
+			}
+		).insert(ignore_permissions=True)
+	if "Restaurant Owner" not in frappe.get_roles(owner.name):
+		owner.add_roles("Restaurant Owner")
+	owner.reload()
+	owner.new_password = DEMO_OWNER_PASSWORD
+	owner.save(ignore_permissions=True)
+
+	existing_sub = frappe.db.exists("Owner Subscription", {"owner_user": owner.name, "status": "Active"})
+	if existing_sub:
+		sub = frappe.get_doc("Owner Subscription", existing_sub)
+	else:
+		sub = frappe.get_doc(
+			{"doctype": "Owner Subscription", "owner_user": owner.name, "plan": "Starter"}
+		).insert(ignore_permissions=True)
+		print(f"Created Owner Subscription {sub.name} for {owner.name} on Starter plan")
+
+	existing_restaurant = frappe.db.exists(
+		"Restaurant", {"owner_subscription": sub.name, "restaurant_name": "Spice Garden"}
+	)
+	if existing_restaurant:
+		return owner.name, frappe.get_doc("Restaurant", existing_restaurant)
+
+	frappe.set_user(owner.name)
+	try:
+		restaurant = frappe.get_doc(
+			{
+				"doctype": "Restaurant",
+				"restaurant_name": "Spice Garden",
+				"owner_subscription": sub.name,
+			}
+		).insert()
+	finally:
+		frappe.set_user("Administrator")
+	print(f"Created Restaurant {restaurant.name} 'Spice Garden' for the second demo owner")
+	return owner.name, restaurant
+
+
+def demonstrate_cross_restaurant_isolation(restaurant_a, restaurant_b):
+	"""Proves the Slice 2 acceptance criterion live: Angkor Cafe's cashier cannot
+	read Spice Garden, and Spice Garden never appears in their restaurant list."""
+	cashier_email = "cashier@example.com"
+	frappe.set_user(cashier_email)
+	try:
+		visible = frappe.get_list("Restaurant", pluck="name")
+		leaked = restaurant_b.name in visible
+		try:
+			frappe.get_doc("Restaurant", restaurant_b.name).check_permission("read")
+			direct_access_blocked = False
+		except frappe.PermissionError:
+			direct_access_blocked = True
+	finally:
+		frappe.set_user("Administrator")
+
+	if not leaked and direct_access_blocked:
+		print(
+			f"Confirmed tenant isolation -- {cashier_email} (staff at {restaurant_a.restaurant_name}) "
+			f"cannot list or directly read {restaurant_b.restaurant_name}."
+		)
+	else:
+		print("WARNING: cross-restaurant isolation may be broken -- see leaked/direct_access_blocked above.")

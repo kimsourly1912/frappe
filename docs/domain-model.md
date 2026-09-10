@@ -1,10 +1,10 @@
 # Domain model
 
-> **Status:** Slice 1 — `Subscription Plan`, `Owner Subscription`, and `Restaurant` are
-> implemented (fields/behavior below reflect actual code, not just the plan). Everything
-> else is still the planned shape baselined from the product spec, to be implemented
-> incrementally (noted per-entity below) — treat those field lists as a starting point,
-> not a frozen schema.
+> **Status:** Slice 2 — `Subscription Plan`, `Owner Subscription`, `Restaurant`, and
+> `Restaurant Member` are implemented (fields/behavior below reflect actual code, not
+> just the plan). Everything else is still the planned shape baselined from the product
+> spec, to be implemented incrementally (noted per-entity below) — treat those field
+> lists as a starting point, not a frozen schema.
 
 ## Entity-relationship overview
 
@@ -157,12 +157,45 @@ automated tests (`bench --site <site> run-tests --app e_menu`):
   `status` — deactivating one is not a loophole to free up a slot, matching "prefer
   deactivation over deletion") must be below `restaurant_limit`.
 
-### Restaurant Member — *Slice 2*
+### Restaurant Member — *Slice 2, implemented*
 The join between `User` and `Restaurant`, carrying the **restaurant-level** role
-(`OWNER` / `MANAGER` / `CASHIER` / `KITCHEN`) — distinct from Frappe's own system roles.
-One user can have multiple `Restaurant Member` rows (different restaurants, different
-roles). `status` (Active/Disabled) supports revoking access without deleting history.
-This is the enforcement point described in `permissions.md`.
+(`OWNER` / `MANAGER` / `CASHIER` / `KITCHEN`) — distinct from Frappe's own system roles
+(see `permissions.md` for the full distinction). Fields: `restaurant`, `user`, `role`
+(Select), `status` (`Active`/`Disabled`). One `(restaurant, user)` pair may only have one
+membership row ever (enforced in `validate()`) — reactivate/change the existing row
+rather than inserting a new one; a user *can* have multiple rows across *different*
+restaurants, each with an independent role.
+
+Business rules, all in `RestaurantMember.validate()` and proven by automated tests:
+- **Who can manage staff:** creating or editing a membership row requires the acting
+  user to already be `OWNER` or `MANAGER` at that restaurant (or a platform admin) — see
+  `permissions.md` for the one bootstrapping exception (a restaurant's very first OWNER
+  row, created automatically).
+- **At least one active OWNER:** disabling a membership, or changing its role away from
+  `OWNER`, is rejected if it would leave the restaurant with zero active OWNERs.
+- **Desk access is additive:** gaining any active membership grants the `Restaurant
+  Staff` Frappe Role (`e_menu.e_menu.doctype.restaurant_member.restaurant_member.RestaurantMember.sync_frappe_role`);
+  disabling one membership never revokes it, in case the user has Desk access via
+  another active membership elsewhere.
+
+`Restaurant.after_insert` automatically creates the restaurant's first `Restaurant
+Member` row (`role=OWNER`, for `owner_subscription.owner_user`) — every restaurant has
+at least one staff member (its creator) from the moment it exists. A one-time patch
+(`e_menu/patches/v0_0/backfill_restaurant_owner_membership.py`) backfills this for
+restaurants created in Slice 1, before this hook existed.
+
+**`invite_staff(restaurant, email, role, first_name=None)`** (whitelisted, in
+`restaurant_member.py`) is the owner/manager-facing "invite staff" action: creates the
+`User` if the email doesn't exist yet, then the `Restaurant Member` row — the one
+whitelisted business action for this slice, per the "don't over-engineer the first
+version" guidance in the spec (no custom permission-type framework, just an explicit
+server-side role check mirroring `validate_actor_can_manage_staff`).
+
+**Restaurant access was extended in this slice** (`e_menu/permissions.py`): originally
+(Slice 1) only `owner_subscription.owner_user` could read/write a `Restaurant`. Now any
+active staff member can *read* it, and `OWNER`/`MANAGER` can also *write* it —
+`CASHIER`/`KITCHEN` remain read-only on the `Restaurant` record itself (they still get
+full read/write on whatever their role needs in later slices, e.g. orders).
 
 ### Menu Category / Menu Item — *Slice 3*
 Both restaurant-scoped. Category name unique **per restaurant** (not globally) via a

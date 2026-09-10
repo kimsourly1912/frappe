@@ -1,10 +1,11 @@
 # Permissions: platform vs. restaurant-level
 
-> **Status:** Slice 1 — `System Manager` (platform) and `Restaurant Owner` (SaaS
-> account-level) are implemented, enforcing access to `Subscription Plan`, `Owner
-> Subscription`, and `Restaurant`. `Restaurant Member` and its per-restaurant
-> OWNER/MANAGER/CASHIER/KITCHEN roles are still Slice 2 — this documents the model
-> Slice 2 implements, unchanged from the original plan.
+> **Status:** Slice 2 — all three layers below are implemented: `System Manager`
+> (platform), `Restaurant Owner` (SaaS account-level), and `Restaurant Member` with its
+> per-restaurant `OWNER`/`MANAGER`/`CASHIER`/`KITCHEN` roles plus the `Restaurant Staff`
+> Frappe Role. Three Frappe Roles now exist (`System Manager`, `Restaurant Owner`,
+> `Restaurant Staff`) alongside the *separate* concept of a `Restaurant Member.role`
+> value — see the "Don't confuse these" callouts below if you're new to this file.
 
 ## Two separate authorization mechanisms
 
@@ -54,9 +55,11 @@ completely different mechanisms:
 Standard Frappe DocType permissions grant `Restaurant Owner` base `create`/`read`/`write`
 on `Restaurant` and `read` on `Owner Subscription` — deliberately **no** `create`/`write`
 on `Owner Subscription` (assignment stays admin-managed for v1) and **no** `delete` on
-`Restaurant` (deactivate via `status`, don't destroy history). Those base grants are then
-narrowed to "only rows this user actually owns" by two more hooks, both in
-`e_menu/permissions.py`:
+`Restaurant` (deactivate via `status`, don't destroy history). (Slice 2 also gave the
+*separate* `Restaurant Staff` role — see below — base `read`/`write` on `Restaurant`, no
+`create`: only a subscription owner creates restaurants; staff join an existing one.)
+Those base grants are then narrowed to "only rows this user actually owns or works at"
+by two more hooks, both in `e_menu/permissions.py`:
 
 - **`permission_query_conditions`** — scopes list/report views (`owner_user = <user>`).
 - **`has_permission`** — scopes direct single-document read/write. For `create` on
@@ -68,38 +71,77 @@ narrowed to "only rows this user actually owns" by two more hooks, both in
   concrete instance of the general rule stated in `architecture.md`: **UI-only/query-only
   filtering is not a security boundary; the write-path check in the controller is.**
 
-## Restaurant-level authorization
+## Restaurant-level authorization — *Slice 2, implemented*
 
-### Roles (initial set)
+### Roles
 
 | Role | Intent |
 |---|---|
 | `OWNER` | Full control of the restaurant: menu, staff, tables, all order/payment actions. |
-| `MANAGER` | Same operational scope as owner minus platform/business-critical settings (exact boundary refined in Slice 2/3 as real screens exist). |
+| `MANAGER` | Same operational scope as owner minus platform/business-critical settings (exact boundary refined in Slice 3+ as real screens exist). |
 | `CASHIER` | Order/payment operations: accept/reject, mark served, confirm manual payments. No menu/staff management. |
 | `KITCHEN` | Order fulfillment only: see accepted orders, mark preparing/ready. No access to menu editing, staff, tables, or payment confirmation. |
 
+These are **`Restaurant Member.role` values (a Select field), not Frappe Roles.** Don't
+confuse `Restaurant Member.role = "OWNER"` (one specific restaurant) with the Frappe Role
+`Restaurant Owner` (the whole SaaS account, described above) — see the comparison table
+above for how they differ.
+
+### The `Restaurant Staff` Frappe Role
+
+Every restaurant persona (`OWNER`/`MANAGER`/`CASHIER`/`KITCHEN` alike) also needs *some*
+Frappe-level Desk-access role — that's `Restaurant Staff` (`desk_access = 1`), granted
+automatically (`RestaurantMember.sync_frappe_role`, additive-only) the moment a user
+gets any active `Restaurant Member` row, at any restaurant, in any role. It's a coarse
+"has Desk access because they work at *a* restaurant somewhere" gate; it carries base
+`read`/`write` on `Restaurant` and `Restaurant Member` (see above) but **grants no
+restaurant-specific distinction by itself** — a `KITCHEN` worker and an `OWNER` hold the
+exact same Frappe Role. All of the real, role-specific narrowing (can this `CASHIER`
+write to *this* `Restaurant`? can this `KITCHEN` worker invite staff?) happens via the
+mechanism below, never via `Restaurant Staff`'s own DocType permission grants.
+
 ### How a request is authorized
 
+The shared helper is `e_menu.permissions.get_active_restaurant_role(user, restaurant)`
+— the restaurant-scoped counterpart to `frappe.get_roles()`. Every check follows the
+same shape:
+
 1. Resolve `frappe.session.user`.
-2. Resolve the `restaurant` the request targets (from the document being read/written,
-   or an explicit parameter on a whitelisted API method).
-3. Look up an **active** `Restaurant Member` row for `(user, restaurant)`.
-   - No active row → reject (`frappe.PermissionError`), regardless of what the request
-     body claims about the restaurant. **A client-supplied `restaurant` field is never
-     sufficient for authorization by itself** — it only says which restaurant's
-     membership to check.
-   - Active row found → check `role` against what the specific action requires (e.g.
-     `manage_staff` requires OWNER/MANAGER; `mark_ready` accepts KITCHEN too).
+2. Resolve the `restaurant` the request targets (a field on the document, or an explicit
+   parameter on a whitelisted API method like `invite_staff`).
+3. Call `get_active_restaurant_role(user, restaurant)`.
+   - `None` (no active `Restaurant Member` row) → reject (`frappe.PermissionError`),
+     regardless of what the request body claims about the restaurant. **A
+     client-supplied `restaurant` field is never sufficient for authorization by
+     itself** — it only says which restaurant's membership to check.
+   - A role → check it against what the specific action requires. Implemented so far:
+     `MANAGING_ROLES = ("OWNER", "MANAGER")` gates writing a `Restaurant` record and
+     managing its staff roster (`RestaurantMember.validate_actor_can_manage_staff`,
+     `invite_staff`); any active role (including `CASHIER`/`KITCHEN`) is enough to
+     *read* the restaurant and its staff list.
 4. Platform admins (`System Manager`) bypass step 3 and may act on any restaurant — this
    is the one explicit, intentional exception, used for support/admin tooling only.
+5. **One bootstrapping exception:** a restaurant's very first `Restaurant Member` row
+   (`role=OWNER`, for the subscription owner) is created automatically by
+   `Restaurant.after_insert` — at that instant no membership row exists yet to check
+   against, so `RestaurantMember._is_owner_bootstrap()` recognizes this one specific
+   case (new row, role OWNER, `user == restaurant.owner_user == frappe.session.user`, no
+   existing active member) and allows it. Every other membership change goes through the
+   normal OWNER/MANAGER check.
 
 This check happens in **every** write path that touches restaurant-owned data: DocType
-`validate()`/`before_save()` controllers for direct document writes, and inside
-whitelisted API methods for actions that aren't plain CRUD (e.g. `Order.accept()`).
-List views and reports are additionally scoped with Frappe **permission query
-conditions** so staff simply never see rows for restaurants they don't belong to — but
-that's a UX/performance filter, not the security boundary; the write-path check is.
+`validate()` controllers for direct document writes (`Restaurant.validate()`,
+`RestaurantMember.validate()`), and inside whitelisted API methods for actions that
+aren't plain CRUD (`invite_staff`; `Order.accept()` etc. will follow the same pattern in
+later slices). List views and reports are additionally scoped with Frappe **permission
+query conditions** so staff simply never see rows for restaurants they don't belong to —
+but that's a UX/performance filter, not the security boundary; the write-path check is.
+Proven end-to-end for Slice 2 both by `bench run-tests --app e_menu` and live over real
+HTTP (login as staff, list/read/invite calls against a restaurant they don't belong to).
+
+A restaurant is also never left without anyone able to manage it:
+`RestaurantMember.validate_not_removing_last_owner` rejects disabling (or role-changing
+away from `OWNER`) the last active `OWNER` membership of a restaurant.
 
 ### Cross-restaurant reference integrity
 
@@ -130,7 +172,9 @@ Frappe supports declaring custom permission actions beyond the standard
 read/write/create/delete/submit/cancel set (e.g. `accept_order`, `mark_served`,
 `void_item`, `manage_staff`). These may be used later purely as a way to express
 role-gating on Desk UI buttons/menu entries more declaratively. They are **not** a
-substitute for the server-side restaurant-membership check above, and Slice 0/1/2
-deliberately don't introduce them yet — per the project's "don't add abstractions before
-the concrete need exists" principle, they'll be added if/when a screen's permission
-logic actually gets unwieldy without them, not preemptively.
+substitute for the server-side restaurant-membership check above, and Slices 0–2
+deliberately don't introduce them yet — `invite_staff`'s authorization is a plain
+explicit `get_active_restaurant_role(...) in MANAGING_ROLES` check, not a custom
+permission type. Per the project's "don't add abstractions before the concrete need
+exists" principle, they'll be added if/when a screen's permission logic actually gets
+unwieldy without them, not preemptively.
