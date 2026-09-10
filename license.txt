@@ -1,0 +1,8 @@
+Proprietary and Confidential
+
+Copyright (c) 2026 E-menu. All rights reserved.
+
+This source code is proprietary to E-menu and is not licensed for
+redistribution, public release, or reuse outside of authorized development
+and deployment of the E-menu platform. No part of this repository may be
+copied, modified, or distributed without prior written permission.
