@@ -19,6 +19,14 @@ DEMO_STAFF = [
 ]
 
 
+DEMO_CATEGORIES = ["Food", "Drinks"]
+DEMO_ITEMS = [
+	# (category, item_name, price)
+	("Food", "Fried Rice", 3.50),
+	("Drinks", "Iced Coffee", 1.50),
+]
+
+
 def create_demo_data():
 	create_plans()
 	owner = create_demo_owner()
@@ -26,9 +34,11 @@ def create_demo_data():
 	restaurant = create_demo_restaurant(subscription)
 	demonstrate_limit_enforcement(subscription)
 	create_demo_staff(restaurant)
+	create_demo_menu(restaurant)
 
 	second_owner, second_restaurant = create_second_demo_restaurant()
 	demonstrate_cross_restaurant_isolation(restaurant, second_restaurant)
+	demonstrate_cross_restaurant_menu_reference_rejected(restaurant, second_restaurant)
 
 	frappe.db.commit()
 	print("\nDemo data ready.")
@@ -236,3 +246,87 @@ def demonstrate_cross_restaurant_isolation(restaurant_a, restaurant_b):
 		)
 	else:
 		print("WARNING: cross-restaurant isolation may be broken -- see leaked/direct_access_blocked above.")
+
+
+def create_demo_menu(restaurant):
+	"""Food/Drinks categories with Fried Rice and Iced Coffee, created as the owner
+	(exercising the real create paths, not ignore_permissions)."""
+	frappe.set_user(restaurant.owner_user)
+	try:
+		categories = {}
+		for category_name in DEMO_CATEGORIES:
+			existing = frappe.db.exists(
+				"Menu Category", {"restaurant": restaurant.name, "category_name": category_name}
+			)
+			if existing:
+				categories[category_name] = existing
+				continue
+			category = frappe.get_doc(
+				{
+					"doctype": "Menu Category",
+					"restaurant": restaurant.name,
+					"category_name": category_name,
+				}
+			).insert()
+			categories[category_name] = category.name
+			print(f"Created Menu Category '{category_name}' for {restaurant.restaurant_name}")
+
+		for category_name, item_name, price in DEMO_ITEMS:
+			if frappe.db.exists(
+				"Menu Item", {"restaurant": restaurant.name, "item_name": item_name}
+			):
+				continue
+			frappe.get_doc(
+				{
+					"doctype": "Menu Item",
+					"restaurant": restaurant.name,
+					"category": categories[category_name],
+					"item_name": item_name,
+					"price": price,
+				}
+			).insert()
+			print(f"Created Menu Item '{item_name}' (${price}) in '{category_name}'")
+	finally:
+		frappe.set_user("Administrator")
+	return categories
+
+
+def demonstrate_cross_restaurant_menu_reference_rejected(restaurant_a, restaurant_b):
+	"""Proves the Slice 3 acceptance criterion live: a Menu Item belonging to
+	Restaurant A can never reference a Menu Category from Restaurant B."""
+	category_b_name = frappe.db.exists(
+		"Menu Category", {"restaurant": restaurant_b.name, "category_name": "House Category"}
+	)
+	if not category_b_name:
+		frappe.set_user(restaurant_b.owner_user)
+		try:
+			category_b_name = frappe.get_doc(
+				{
+					"doctype": "Menu Category",
+					"restaurant": restaurant_b.name,
+					"category_name": "House Category",
+				}
+			).insert().name
+		finally:
+			frappe.set_user("Administrator")
+
+	frappe.set_user(restaurant_a.owner_user)
+	try:
+		frappe.get_doc(
+			{
+				"doctype": "Menu Item",
+				"restaurant": restaurant_a.name,
+				"category": category_b_name,
+				"item_name": "Should Not Be Created",
+				"price": 1,
+			}
+		).insert()
+	except frappe.ValidationError as e:
+		print(
+			f"Confirmed cross-restaurant menu integrity -- {restaurant_a.restaurant_name} "
+			f"cannot use a category from {restaurant_b.restaurant_name}: {e}"
+		)
+	else:
+		print("WARNING: cross-restaurant category reference was NOT rejected -- integrity check may be broken.")
+	finally:
+		frappe.set_user("Administrator")

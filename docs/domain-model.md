@@ -1,10 +1,10 @@
 # Domain model
 
-> **Status:** Slice 2 — `Subscription Plan`, `Owner Subscription`, `Restaurant`, and
-> `Restaurant Member` are implemented (fields/behavior below reflect actual code, not
-> just the plan). Everything else is still the planned shape baselined from the product
-> spec, to be implemented incrementally (noted per-entity below) — treat those field
-> lists as a starting point, not a frozen schema.
+> **Status:** Slice 3 — `Subscription Plan`, `Owner Subscription`, `Restaurant`,
+> `Restaurant Member`, `Menu Category`, and `Menu Item` are implemented (fields/behavior
+> below reflect actual code, not just the plan). Everything else is still the planned
+> shape baselined from the product spec, to be implemented incrementally (noted
+> per-entity below) — treat those field lists as a starting point, not a frozen schema.
 
 ## Entity-relationship overview
 
@@ -197,12 +197,35 @@ active staff member can *read* it, and `OWNER`/`MANAGER` can also *write* it —
 `CASHIER`/`KITCHEN` remain read-only on the `Restaurant` record itself (they still get
 full read/write on whatever their role needs in later slices, e.g. orders).
 
-### Menu Category / Menu Item — *Slice 3*
-Both restaurant-scoped. Category name unique **per restaurant** (not globally) via a
-compound uniqueness check in `validate()` (Frappe's declarative `unique` field option is
-global-only, so this needs an explicit query check). **Integrity rule enforced
-server-side:** `Menu Item.validate()` rejects any item whose `category.restaurant !=
-item.restaurant` — a menu item can never reference another restaurant's category.
+### Menu Category / Menu Item — *Slice 3, implemented*
+Both restaurant-scoped, fieldnames `category_name`/`item_name` (not `name` — Frappe's
+own autoname field, same reason `owner_user` isn't called `owner`; see Slice 1).
+
+**Menu Category:** `restaurant`, `category_name`, `description`, `image` (`Attach
+Image` — native Frappe file upload, no custom file-handling code), `sort_order`,
+`is_active`. Name unique **per restaurant** (not globally), via an explicit `validate()`
+query check (Frappe's declarative `unique` field option is a global DB constraint, which
+would incorrectly block Restaurant A and B from both having a "Drinks" category) —
+MariaDB's `utf8mb4_unicode_ci` collation (see `development.md`) makes the comparison
+case-insensitive for free.
+
+**Menu Item:** `restaurant`, `category` (Link), `item_name`, `description`, `image`,
+`price` (Currency, non-negative), `is_available`, `is_featured`, `sort_order`. **Core
+integrity rule, enforced server-side in `MenuItem.validate()`:** a Menu Item's `category`
+must belong to the *same* `restaurant` as the item itself — checked unconditionally
+(even for a platform admin), because this is a data-integrity invariant, not an
+authorization rule. Proven by automated tests and live over real HTTP
+(`POST /api/resource/Menu Item` with a cross-restaurant `category` returns HTTP 417).
+A matching client-side `frm.set_query()` filter on the `category` field (Desk UX only,
+not a security control) keeps the picker showing only same-restaurant categories.
+
+**Authorization** (`e_menu/permissions.py`, generalized into
+`_restaurant_scoped_has_permission`/`_restaurant_scoped_query_conditions` since this is
+now the third DocType with the same shape — see `Restaurant Member` above): any active
+staff member of the restaurant can read; `OWNER`/`MANAGER` can also create/write/delete.
+`CASHIER`/`KITCHEN` are read-only on the menu itself, matching `permissions.md`'s stated
+role intent (they need to *see* prices/items, not edit them).
+
 Variants/add-ons are intentionally not modeled in v1; the schema doesn't need to
 anticipate them beyond "don't do anything that would make adding them later a rewrite"
 (e.g. don't hardcode a single flat price string anywhere outside `Menu Item.price`).

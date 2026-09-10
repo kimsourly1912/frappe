@@ -1,9 +1,11 @@
 # Permissions: platform vs. restaurant-level
 
-> **Status:** Slice 2 — all three layers below are implemented: `System Manager`
+> **Status:** Slice 3 — all three layers below are implemented: `System Manager`
 > (platform), `Restaurant Owner` (SaaS account-level), and `Restaurant Member` with its
 > per-restaurant `OWNER`/`MANAGER`/`CASHIER`/`KITCHEN` roles plus the `Restaurant Staff`
-> Frappe Role. Three Frappe Roles now exist (`System Manager`, `Restaurant Owner`,
+> Frappe Role. `Menu Category`/`Menu Item` (Slice 3) reuse the exact same
+> restaurant-level mechanism — see "Extending this to new restaurant-scoped DocTypes"
+> below. Three Frappe Roles now exist (`System Manager`, `Restaurant Owner`,
 > `Restaurant Staff`) alongside the *separate* concept of a `Restaurant Member.role`
 > value — see the "Don't confuse these" callouts below if you're new to this file.
 
@@ -143,13 +145,39 @@ A restaurant is also never left without anyone able to manage it:
 `RestaurantMember.validate_not_removing_last_owner` rejects disabling (or role-changing
 away from `OWNER`) the last active `OWNER` membership of a restaurant.
 
-### Cross-restaurant reference integrity
+### Extending this to new restaurant-scoped DocTypes — *pattern established in Slice 3*
+
+`Menu Category` and `Menu Item` (Slice 3) were the third and fourth DocTypes needing
+"any active staff member reads, OWNER/MANAGER writes" — at that point the shape was
+extracted into two generic helpers in `e_menu/permissions.py`, used by (or wrapped by)
+every restaurant-scoped DocType's own hook functions:
+
+- `_restaurant_scoped_query_conditions(table, user)` — the `permission_query_conditions`
+  shape, for any DocType with a plain `restaurant` Link field.
+- `_restaurant_scoped_has_permission(doc, ptype, user)` — the matching `has_permission`
+  shape: read for any active staff member of `doc.restaurant`, write/create/delete
+  restricted to `OWNER`/`MANAGER`.
+
+This assumes `restaurant` is a **plain field**, populated directly from the request —
+not a `fetch_from` field like `Restaurant.owner_user`, which isn't populated yet at the
+point Frappe checks create-permission (see `Restaurant`'s entry above for why that one
+needed a `ptype == "create"` special case instead). When adding the next
+restaurant-scoped DocType (`Restaurant Table` in Slice 4, `Order` in Slice 6, ...):
+reuse these two helpers directly, don't reintroduce the SQL/role-check inline — and if a
+DocType needs different read/write boundaries than "any staff / OWNER+MANAGER" (e.g.
+`Order` will likely need `KITCHEN` to *write* certain order-status transitions), write
+that DocType's own `has_permission` function rather than forcing it through the shared
+helper unchanged.
+
+### Cross-restaurant reference integrity — *implemented, Slice 3*
 
 Some checks aren't about "who can act" but "does this data make sense" — e.g. a `Menu
-Item.category` must belong to the same restaurant as the `Menu Item` itself. These are
-enforced in the same `validate()` methods, independent of the membership check, because
-they're invariants of the data model, not permissions per se. See `domain-model.md` for
-the specific integrity rules per DocType.
+Item.category` must belong to the same restaurant as the `Menu Item` itself
+(`MenuItem.validate_category_belongs_to_same_restaurant`). These are enforced in the
+same `validate()` methods, independent of the membership check, because they're
+invariants of the data model, not permissions per se — the check runs even for a
+platform admin, unlike every authorization check above. See `domain-model.md` for the
+specific integrity rules per DocType.
 
 ## Customer-facing (unauthenticated) access
 

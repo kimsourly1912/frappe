@@ -30,6 +30,42 @@ def get_active_restaurant_role(user: str, restaurant: str) -> str | None:
 	)
 
 
+def _active_membership_subquery(escaped_user: str) -> str:
+	return (
+		f"select restaurant from `tabRestaurant Member` "
+		f"where user = {escaped_user} and status = 'Active'"
+	)
+
+
+def _restaurant_scoped_query_conditions(table: str, user: str | None = None) -> str:
+	"""Shared permission_query_conditions shape for any DocType with a plain
+	'restaurant' Link field (Restaurant Member, Menu Category, Menu Item, ...):
+	visible to any active staff member of that restaurant. Restaurant itself is
+	similar but also OR's in owner_user, so it isn't built on this helper."""
+	user = user or frappe.session.user
+	if is_platform_admin(user):
+		return ""
+	escaped_user = frappe.db.escape(user)
+	return f"(`tab{table}`.restaurant in ({_active_membership_subquery(escaped_user)}))"
+
+
+def _restaurant_scoped_has_permission(doc, ptype: str | None = None, user: str | None = None) -> bool:
+	"""Shared has_permission shape for the same kind of DocType: read for any active
+	staff member of doc.restaurant, write/create/delete for OWNER/MANAGER only.
+	Assumes doc.restaurant is a plain field (not fetch_from), so it's already
+	populated even on an in-memory, not-yet-inserted document -- unlike
+	Restaurant.owner_user, there's no create-time timing issue to special-case."""
+	user = user or frappe.session.user
+	if is_platform_admin(user):
+		return True
+	role = get_active_restaurant_role(user, doc.restaurant)
+	if role is None:
+		return False
+	if ptype == "read":
+		return True
+	return role in MANAGING_ROLES
+
+
 def get_permission_query_conditions_for_owner_subscription(user: str | None = None) -> str:
 	user = user or frappe.session.user
 	if is_platform_admin(user):
@@ -51,11 +87,10 @@ def get_permission_query_conditions_for_restaurant(user: str | None = None) -> s
 	if is_platform_admin(user):
 		return ""
 	escaped_user = frappe.db.escape(user)
-	return f"""(`tabRestaurant`.owner_user = {escaped_user}
-		or `tabRestaurant`.name in (
-			select restaurant from `tabRestaurant Member`
-			where user = {escaped_user} and status = 'Active'
-		))"""
+	return (
+		f"(`tabRestaurant`.owner_user = {escaped_user} "
+		f"or `tabRestaurant`.name in ({_active_membership_subquery(escaped_user)}))"
+	)
 
 
 def has_permission_restaurant(doc, ptype: str | None = None, user: str | None = None) -> bool:
@@ -86,29 +121,31 @@ def get_permission_query_conditions_for_restaurant_member(user: str | None = Non
 	"""Visible to: any active member of the same restaurant (so staff can see their
 	own restaurant's roster) -- narrower than that (e.g. hiding colleagues' rows
 	from CASHIER/KITCHEN) isn't a concrete requirement yet, so it isn't built."""
-	user = user or frappe.session.user
-	if is_platform_admin(user):
-		return ""
-	escaped_user = frappe.db.escape(user)
-	return f"""(`tabRestaurant Member`.restaurant in (
-		select restaurant from `tabRestaurant Member`
-		where user = {escaped_user} and status = 'Active'
-	))"""
+	return _restaurant_scoped_query_conditions("Restaurant Member", user)
 
 
 def has_permission_restaurant_member(doc, ptype: str | None = None, user: str | None = None) -> bool:
 	user = user or frappe.session.user
-	if is_platform_admin(user):
-		return True
-	if ptype == "create":
+	if ptype == "create" and not is_platform_admin(user):
 		# Restaurant Member.validate() (validate_actor_can_manage_staff) is the
-		# authoritative check for who may actually create a membership row.
+		# authoritative check for who may actually create a membership row --
+		# it also handles the owner-bootstrap exception, which doesn't fit this
+		# generic shape.
 		return True
-	role = get_active_restaurant_role(user, doc.restaurant)
-	if role is None:
-		return False
-	if ptype == "read":
-		return True
-	# write/delete (changing someone's role, disabling them): OWNER/MANAGER only --
-	# also enforced in Restaurant Member.validate(), this is the read/write gate.
-	return role in MANAGING_ROLES
+	return _restaurant_scoped_has_permission(doc, ptype, user)
+
+
+def get_permission_query_conditions_for_menu_category(user: str | None = None) -> str:
+	return _restaurant_scoped_query_conditions("Menu Category", user)
+
+
+def has_permission_menu_category(doc, ptype: str | None = None, user: str | None = None) -> bool:
+	return _restaurant_scoped_has_permission(doc, ptype, user)
+
+
+def get_permission_query_conditions_for_menu_item(user: str | None = None) -> str:
+	return _restaurant_scoped_query_conditions("Menu Item", user)
+
+
+def has_permission_menu_item(doc, ptype: str | None = None, user: str | None = None) -> bool:
+	return _restaurant_scoped_has_permission(doc, ptype, user)

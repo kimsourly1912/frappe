@@ -5,73 +5,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from e_menu.e_menu.doctype.restaurant_member.restaurant_member import invite_staff
-
-
-def make_owner():
-	email = f"owner-{frappe.generate_hash(length=8)}@example.test"
-	user = frappe.get_doc(
-		{
-			"doctype": "User",
-			"email": email,
-			"first_name": "owner",
-			"send_welcome_email": 0,
-		}
-	).insert(ignore_permissions=True)
-	user.add_roles("Restaurant Owner")
-	return user
-
-
-def make_staff_user(prefix="staff"):
-	email = f"{prefix}-{frappe.generate_hash(length=8)}@example.test"
-	return frappe.get_doc(
-		{
-			"doctype": "User",
-			"email": email,
-			"first_name": prefix,
-			"send_welcome_email": 0,
-		}
-	).insert(ignore_permissions=True)
-
-
-def make_restaurant_for_owner(owner_email, restaurant_limit=5):
-	plan = frappe.get_doc(
-		{
-			"doctype": "Subscription Plan",
-			"plan_name": f"Test Plan {frappe.generate_hash(length=8)}",
-			"restaurant_limit": restaurant_limit,
-		}
-	).insert(ignore_permissions=True)
-	sub = frappe.get_doc(
-		{"doctype": "Owner Subscription", "owner_user": owner_email, "plan": plan.name}
-	).insert(ignore_permissions=True)
-
-	frappe.set_user(owner_email)
-	try:
-		restaurant = frappe.get_doc(
-			{
-				"doctype": "Restaurant",
-				"restaurant_name": f"Test Restaurant {frappe.generate_hash(length=6)}",
-				"owner_subscription": sub.name,
-			}
-		).insert()
-	finally:
-		frappe.set_user("Administrator")
-	return restaurant
-
-
-def add_member(restaurant, user, role, *, as_user=None):
-	frappe.set_user(as_user or frappe.session.user)
-	try:
-		return frappe.get_doc(
-			{
-				"doctype": "Restaurant Member",
-				"restaurant": restaurant,
-				"user": user,
-				"role": role,
-			}
-		).insert()
-	finally:
-		frappe.set_user("Administrator")
+from e_menu.e_menu.testing import add_member, make_owner, make_restaurant_for_owner, make_staff_user
 
 
 class TestRestaurantMember(FrappeTestCase):

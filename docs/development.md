@@ -280,10 +280,46 @@ implemented, along with:
 - `Restaurant` read/write access extended from "just the subscription owner" (Slice 1)
   to "any active staff member can read; OWNER/MANAGER can also write".
 
-## What's next: Slice 3
+## Verifying it runs (Slice 3 acceptance)
 
-Slice 3 implements menu management: `Menu Category` and `Menu Item`, restaurant-scoped,
-with server-side rejection of cross-restaurant references (a `Menu Item` can never
-reference another restaurant's `Menu Category`). Acceptance: owner/authorized staff can
-manage the menu; cross-restaurant references are rejected. See
+```bash
+bench --site emenu.localhost execute e_menu.e_menu.demo.create_demo_data
+# -> (still idempotent) also creates Food/Drinks categories and Fried Rice ($3.50) /
+#    Iced Coffee ($1.50) menu items for Angkor Cafe, and prints confirmation that
+#    Angkor Cafe cannot use a category from Spice Garden
+
+bench --site emenu.localhost run-tests --app e_menu
+# -> Ran 39 tests ... OK
+#    (24 from Slices 1-2, plus: owner/manager can create categories and items,
+#    cashier/kitchen cannot, category names unique per restaurant but may repeat
+#    across restaurants, menu items require non-negative price, tenant isolation
+#    for both Menu Category and Menu Item, and the core acceptance test: a Menu
+#    Item can never reference a Menu Category from a different restaurant)
+```
+
+Also verified live over real HTTP during Slice 3: signed in as the demo owner,
+`GET /api/resource/Menu Item` returns Angkor Cafe's two seeded items; signed in as
+`manager@example.com`, `POST /api/resource/Menu Item` succeeds (200); signed in as
+`cashier@example.com`, the same `POST` on `Menu Category` returns HTTP 403; and a
+`POST /api/resource/Menu Item` referencing a category from a different restaurant
+returns HTTP 417 with a clear `ValidationError`.
+
+## Menu management: what's built in Slice 3
+
+`Menu Category` and `Menu Item` (`e_menu/e_menu/doctype/menu_category/`,
+`.../menu_item/`) reuse the exact restaurant-level authorization mechanism from Slice 2
+— see `permissions.md` → "Extending this to new restaurant-scoped DocTypes" — rather
+than inventing anything new: any active staff member reads the menu, `OWNER`/`MANAGER`
+manage it, `CASHIER`/`KITCHEN` don't. The one new rule is the cross-restaurant integrity
+check on `Menu Item.category` (see `domain-model.md`).
+
+Test fixtures shared across three-plus doctype test files (owner/staff/restaurant setup)
+were extracted into `e_menu/e_menu/testing.py` at this point, replacing per-file copies.
+
+## What's next: Slice 4
+
+Slice 4 implements tables and QR codes: `Restaurant Table` with a secure, unguessable
+`qr_token` (never the sequential internal document name), QR code generation, and the
+public QR URL shape. Acceptance: scanning a QR resolves exactly one active
+Restaurant + Table; invalid/deactivated tokens fail safely. See
 [domain-model.md](domain-model.md) for the planned shape.

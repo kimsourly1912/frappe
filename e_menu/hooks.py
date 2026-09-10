@@ -137,12 +137,16 @@ permission_query_conditions = {
 	"Owner Subscription": "e_menu.permissions.get_permission_query_conditions_for_owner_subscription",
 	"Restaurant": "e_menu.permissions.get_permission_query_conditions_for_restaurant",
 	"Restaurant Member": "e_menu.permissions.get_permission_query_conditions_for_restaurant_member",
+	"Menu Category": "e_menu.permissions.get_permission_query_conditions_for_menu_category",
+	"Menu Item": "e_menu.permissions.get_permission_query_conditions_for_menu_item",
 }
 
 has_permission = {
 	"Owner Subscription": "e_menu.permissions.has_permission_owner_subscription",
 	"Restaurant": "e_menu.permissions.has_permission_restaurant",
 	"Restaurant Member": "e_menu.permissions.has_permission_restaurant_member",
+	"Menu Category": "e_menu.permissions.has_permission_menu_category",
+	"Menu Item": "e_menu.permissions.has_permission_menu_item",
 }
 
 # DocType Class
